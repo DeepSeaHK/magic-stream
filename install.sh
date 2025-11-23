@@ -2,14 +2,14 @@
 set -e
 
 ########################################
-# 這行已幫你改成自己的 GitHub 倉庫：
+# 已幫你改成自己的 GitHub 倉庫：
 ########################################
 RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 
 # 安裝目錄（預設：當前用戶的 home）
 INSTALL_DIR="$HOME/magic_stream"
 
-# 你想用的命令名：以後在終端輸入這個單詞
+# 之後在終端輸入的命令名
 BIN_CMD_NAME="ms"
 BIN_PATH="/usr/local/bin/$BIN_CMD_NAME"
 ########################################
@@ -57,14 +57,37 @@ echo
 echo "安裝系統依賴 (ffmpeg, python3, pip, screen)..."
 if command -v apt >/dev/null 2>&1; then
   $SUDO apt update
-  $SUDO apt install -y ffmpeg python3 python3-pip screen
+  $SUDO apt install -y ffmpeg python3 python3-pip python3-venv screen
 else
-  echo "非 Debian/Ubuntu 系統，請自行安裝 ffmpeg / python3 / pip / screen。"
+  echo "非 Debian/Ubuntu 系統，請自行安裝 ffmpeg / python3 / pip / screen / python3-venv。"
 fi
 
+# ===== 建立專用 venv 並安裝 YouTube API 依賴 =====
+VENV_DIR="$INSTALL_DIR/venv"
+VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
+
 echo
-echo "安裝 YouTube API 相關 Python 套件..."
-pip3 install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+echo "建立 Python 虛擬環境（venv）並安裝 YouTube API 套件..."
+
+if command -v python3 >/dev/null 2>&1; then
+  if [ ! -x "$VENV_PYTHON" ]; then
+    echo "建立虛擬環境: $VENV_DIR"
+    python3 -m venv "$VENV_DIR" || echo "建立 venv 失敗，稍後可在菜單裡再次安裝。"
+  else
+    echo "已存在 venv：$VENV_DIR"
+  fi
+
+  if [ -x "$VENV_PIP" ]; then
+    "$VENV_PIP" install --upgrade pip
+    "$VENV_PIP" install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib || \
+      echo "安裝 YouTube API 依賴失敗，可稍後從菜單『3-4 安裝 YouTube API 依賴』重試。"
+  else
+    echo "未找到 venv 的 pip，請稍後在菜單中重新安裝依賴。"
+  fi
+else
+  echo "未找到 python3，請稍後在菜單中先安裝 Python 環境。"
+fi
 
 # 提示放置憑證的說明
 if [ ! -f "$INSTALL_DIR/youtube_auth/README.txt" ]; then
