@@ -1,5 +1,5 @@
 #!/bin/bash
-# Magic Stream - 直播推流腳本 v0.1
+# Magic Stream - 直播推流腳本 v0.3
 
 # ===== 基礎配置 =====
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,6 +7,12 @@ VOD_DIR="$BASE_DIR/vod"                       # 文件推流目錄
 LOG_DIR="$BASE_DIR/logs"                      # 日誌目錄
 AUTO_SCRIPT="$BASE_DIR/magic_autostream.py"   # 自動推流 Python 腳本
 YOUTUBE_RTMP_BASE="rtmp://a.rtmp.youtube.com/live2"
+RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
+
+# venv 設定
+VENV_DIR="$BASE_DIR/venv"
+VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_PIP="$VENV_DIR/bin/pip"
 
 mkdir -p "$VOD_DIR" "$LOG_DIR"
 
@@ -30,6 +36,46 @@ pause() {
   read -p "按回車鍵返回菜單..." _
 }
 
+# ===== venv & 依賴自動安裝 =====
+ensure_venv() {
+  # 已存在就直接用
+  if [ -x "$VENV_PYTHON" ] && [ -x "$VENV_PIP" ]; then
+    return 0
+  fi
+
+  echo -e "${YELLOW}未偵測到 Magic Stream 專用 venv，正在自動建立...${RESET}"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo -e "${RED}系統未安裝 python3，請先在『3. 直播系統安裝』裡安裝 Python。${RESET}"
+    return 1
+  fi
+
+  # 確保有 python3-venv
+  if command -v apt >/dev/null 2>&1; then
+    $SUDO apt install -y python3-venv
+  fi
+
+  python3 -m venv "$VENV_DIR" || {
+    echo -e "${RED}建立 venv 失敗。${RESET}"
+    return 1
+  }
+
+  if [ ! -x "$VENV_PIP" ]; then
+    echo -e "${RED}找不到 venv pip，請檢查 Python 安裝。${RESET}"
+    return 1
+  fi
+
+  echo "安裝 YouTube API 相關套件..."
+  "$VENV_PIP" install --upgrade pip
+  "$VENV_PIP" install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib || {
+    echo -e "${RED}安裝 YouTube API 依賴失敗。${RESET}"
+    return 1
+  }
+
+  echo -e "${GREEN}venv 與依賴安裝完成。${RESET}"
+  return 0
+}
+
 # ===== 1.1 手動轉播推流 =====
 manual_relay() {
   clear
@@ -40,14 +86,16 @@ manual_relay() {
   read -p "請輸入直播源地址 (http://... 或 rtmp://...): " SOURCE_URL
   if [ -z "$SOURCE_URL" ]; then
     echo -e "${RED}直播源地址不能為空。${RESET}"
-    pause; return
+    pause
+    return
   fi
 
   echo "默認平台：YouTube ($YOUTUBE_RTMP_BASE)"
   read -p "請輸入直播碼 (只填 key，例如 abcd-xxxx-1234): " STREAM_KEY
   if [ -z "$STREAM_KEY" ]; then
     echo -e "${RED}直播碼不能為空。${RESET}"
-    pause; return
+    pause
+    return
   fi
 
   read -p "如需自定 RTMP 前綴，輸入（留空=使用默認 $YOUTUBE_RTMP_BASE）: " RTMP_PREFIX
@@ -82,7 +130,8 @@ manual_relay() {
   read -p "確認開始推流？(y/n): " go
   if [ "$go" != "y" ] && [ "$go" != "Y" ]; then
     echo "已取消。"
-    pause; return
+    pause
+    return
   fi
 
   screen -S "$SESSION_NAME" -dm bash -lc "$CMD"
@@ -99,11 +148,19 @@ auto_relay() {
 
   if [ ! -f "$AUTO_SCRIPT" ]; then
     echo -e "${RED}未找到自動推流腳本：$AUTO_SCRIPT${RESET}"
-    pause; return
+    pause
+    return
   fi
 
+  # 確保 venv 與依賴就緒
+  ensure_venv || { pause; return; }
+
   read -p "請輸入直播源地址 (http://... 或 rtmp://...): " SOURCE_URL
-  [ -z "$SOURCE_URL" ] && { echo -e "${RED}直播源地址不能為空。${RESET}"; pause; return; }
+  if [ -z "$SOURCE_URL" ]; then
+    echo -e "${RED}直播源地址不能為空。${RESET}"
+    pause
+    return
+  fi
 
   read -p "請輸入 YouTube 直播間標題: " TITLE
   [ -z "$TITLE" ] && TITLE="Magic Stream Auto Live"
@@ -114,7 +171,7 @@ auto_relay() {
   SESSION_NAME="ms_auto_$(date +%m%d_%H%M%S)"
   LOG_FILE="$LOG_DIR/${SESSION_NAME}.log"
 
-  CMD="python3 \"$AUTO_SCRIPT\" \
+  CMD="\"$VENV_PYTHON\" \"$AUTO_SCRIPT\" \
     --source-url \"$SOURCE_URL\" \
     --title \"$TITLE\" \
     --reconnect-seconds $RECONNECT_SEC \
@@ -130,7 +187,8 @@ auto_relay() {
   read -p "確認開始自動推流？(y/n): " go
   if [ "$go" != "y" ] && [ "$go" != "Y" ]; then
     echo "已取消。"
-    pause; return
+    pause
+    return
   fi
 
   screen -S "$SESSION_NAME" -dm bash -lc "$CMD"
@@ -164,17 +222,26 @@ file_relay() {
   echo
 
   read -p "請輸入需要直播的文件名（含擴展名）: " FILENAME
-  [ -z "$FILENAME" ] && { echo -e "${RED}文件名不能為空。${RESET}"; pause; return; }
+  if [ -z "$FILENAME" ]; then
+    echo -e "${RED}文件名不能為空。${RESET}"
+    pause
+    return
+  fi
 
   INPUT_FILE="$VOD_DIR/$FILENAME"
   if [ ! -f "$INPUT_FILE" ]; then
     echo -e "${RED}找不到文件：$INPUT_FILE${RESET}"
-    pause; return
+    pause
+    return
   fi
 
   echo "默認平台：YouTube ($YOUTUBE_RTMP_BASE)"
   read -p "請輸入直播碼 (只填 key): " STREAM_KEY
-  [ -z "$STREAM_KEY" ] && { echo -e "${RED}直播碼不能為空。${RESET}"; pause; return; }
+  if [ -z "$STREAM_KEY" ]; then
+    echo -e "${RED}直播碼不能為空。${RESET}"
+    pause
+    return
+  fi
 
   read -p "如需自定 RTMP 前綴，輸入（留空=默認 $YOUTUBE_RTMP_BASE）: " RTMP_PREFIX
   [ -z "$RTMP_PREFIX" ] && RTMP_PREFIX="$YOUTUBE_RTMP_BASE"
@@ -221,7 +288,8 @@ file_relay() {
   read -p "確認開始文件推流？(y/n): " go
   if [ "$go" != "y" ] && [ "$go" != "Y" ]; then
     echo "已取消。"
-    pause; return
+    pause
+    return
   fi
 
   screen -S "$SESSION_NAME" -dm bash -lc "$CMD"
@@ -237,15 +305,27 @@ install_menu() {
     echo "1. 系統升級 & 更新 (apt update && upgrade)"
     echo "2. 安裝 Python 環境 (python3, pip)"
     echo "3. 安裝 ffmpeg"
-    echo "4. 安裝 YouTube API 依賴"
+    echo "4. 安裝 / 修復 YouTube API 依賴（建立 venv）"
     echo "0. 返回主菜單"
     echo
     read -p "請選擇: " choice
     case "$choice" in
-      1) $SUDO apt update && $SUDO apt -y upgrade; pause ;;
-      2) $SUDO apt install -y python3 python3-pip python3-venv; pause ;;
-      3) $SUDO apt install -y ffmpeg; pause ;;
-      4) pip3 install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib; pause ;;
+      1)
+        $SUDO apt update && $SUDO apt -y upgrade
+        pause
+        ;;
+      2)
+        $SUDO apt install -y python3 python3-pip python3-venv
+        pause
+        ;;
+      3)
+        $SUDO apt install -y ffmpeg
+        pause
+        ;;
+      4)
+        ensure_venv
+        pause
+        ;;
       0) break ;;
       *) echo "無效選擇"; sleep 1 ;;
     esac
@@ -257,22 +337,33 @@ process_menu() {
   while true; do
     clear
     echo -e "${CYAN}Magic Stream -> 4. 推流進程管理${RESET}"
-  echo "1. 查看所有 screen 會話"
+    echo "1. 查看所有 screen 會話"
     echo "2. 進入指定 screen 查看推流狀態"
     echo "3. 結束指定 screen（等於結束該路直播）"
     echo "0. 返回主菜單"
     echo
     read -p "請選擇: " choice
     case "$choice" in
-      1) screen -ls || echo "當前沒有 screen 會話。"; pause ;;
+      1)
+        screen -ls || echo "當前沒有 screen 會話。"
+        pause
+        ;;
       2)
         read -p "輸入要進入的 screen 名稱: " SNAME
-        [ -z "$SNAME" ] && { echo "名稱不能為空。"; sleep 1; continue; }
+        if [ -z "$SNAME" ]; then
+          echo "名稱不能為空。"
+          sleep 1
+          continue
+        fi
         screen -r "$SNAME"
         ;;
       3)
         read -p "輸入要結束的 screen 名稱: " SNAME
-        [ -z "$SNAME" ] && { echo "名稱不能為空。"; sleep 1; continue; }
+        if [ -z "$SNAME" ]; then
+          echo "名稱不能為空。"
+          sleep 1
+          continue
+        fi
         screen -S "$SNAME" -X quit || echo "結束失敗，可能沒有這個會話。"
         pause
         ;;
@@ -282,6 +373,57 @@ process_menu() {
   done
 }
 
+# ===== 5. 更新腳本 =====
+update_scripts() {
+  clear
+  echo -e "${CYAN}Magic Stream -> 5. 更新腳本${RESET}"
+  echo "將從 GitHub 重新拉取最新版本："
+  echo "  - magic_stream.sh"
+  echo "  - magic_autostream.py"
+  echo "倉庫：$RAW_BASE"
+  echo
+  read -p "確認更新？(y/n): " go
+  if [ "$go" != "y" ] && [ "$go" != "Y" ]; then
+    echo "已取消。"
+    pause
+    return
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo -e "${RED}系統未安裝 curl，無法自動更新。${RESET}"
+    pause
+    return
+  fi
+
+  # 備份舊版本
+  backup_dir="$BASE_DIR/backup_$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$backup_dir"
+  cp "$BASE_DIR/magic_stream.sh" "$backup_dir/" 2>/dev/null || true
+  cp "$BASE_DIR/magic_autostream.py" "$backup_dir/" 2>/dev/null || true
+  echo "已備份舊文件到：$backup_dir"
+
+  echo
+  echo "下載最新 magic_stream.sh..."
+  if ! curl -fsSL "$RAW_BASE/magic_stream.sh" -o "$BASE_DIR/magic_stream.sh"; then
+    echo -e "${RED}下載 magic_stream.sh 失敗，已保留備份。${RESET}"
+    pause
+    return
+  fi
+
+  echo "下載最新 magic_autostream.py..."
+  if ! curl -fsSL "$RAW_BASE/magic_autostream.py" -o "$BASE_DIR/magic_autostream.py"; then
+    echo -e "${RED}下載 magic_autostream.py 失敗，已保留備份。${RESET}"
+    pause
+    return
+  fi
+
+  chmod +x "$BASE_DIR/magic_stream.sh" "$BASE_DIR/magic_autostream.py"
+
+  echo
+  echo -e "${GREEN}更新完成！請退出本次菜單，重新執行 'ms' 以載入新版本。${RESET}"
+  pause
+}
+
 # ===== 主菜單 =====
 main_menu() {
   while true; do
@@ -289,13 +431,14 @@ main_menu() {
     echo -e "${CYAN}"
     echo "========================================"
     echo "             Magic Stream"
-    echo "           直播推流腳本 v0.1"
+    echo "           直播推流腳本 v0.3"
     echo "========================================"
     echo -e "${RESET}"
     echo "1. 轉播推流"
     echo "2. 文件推流"
     echo "3. 直播系統安裝"
     echo "4. 推流進程管理"
+    echo "5. 更新腳本"
     echo "0. 退出腳本"
     echo "----------------------------------------"
     read -p "請選擇: " choice
@@ -304,6 +447,7 @@ main_menu() {
       2) file_relay ;;
       3) install_menu ;;
       4) process_menu ;;
+      5) update_scripts ;;
       0) echo "Bye~"; exit 0 ;;
       *) echo "無效選擇"; sleep 1 ;;
     esac
