@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Magic Stream 主腳本 v0.4.0
+# Magic Stream 主腳本 v0.4.1
 
 # ========= 全局設置 =========
 BASE_DIR="$HOME/magic_stream"
@@ -11,7 +11,7 @@ RUN_DIR="$BASE_DIR/run"
 
 RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 
-VERSION="v0.4.0"
+VERSION="v0.4.1"
 
 # 顏色
 CYAN="\033[36m"
@@ -69,8 +69,26 @@ list_screens() {
   clear
   echo -e "${CYAN}Magic Stream -> 4.1 所有 screen 會話${RESET}"
   echo
-  # 沒有會話時 screen -ls 會返回非零，因此加上 || true
-  screen -ls || true
+
+  local lines
+  lines=$(screen -ls 2>/dev/null || true)
+
+  # 沒有任何會話
+  if ! echo "$lines" | grep -q '\.'; then
+    echo "目前沒有任何 screen 會話。"
+    pause
+    return
+  fi
+
+  echo "當前 screen 會話："
+  echo
+
+  # 例如 "  167188.ms_vod_01  (Detached)"
+  # -> "名稱: ms_vod_01  (PID:167188)  167188.ms_vod_01  (Detached)"
+  echo "$lines" | sed -n 's/^[[:space:]]\+\([0-9]\+\)\.\([^.[:space:]]\+\)[[:space:]]\+(.*$/名稱: \2  (PID:\1)  \0/p'
+
+  echo
+  echo "※ 在 4.3 / 4.4 裡輸入的名稱，只填 ms_xxx_01 這一段即可。"
   pause
 }
 
@@ -300,7 +318,7 @@ file_stream_menu() {
   pause
 }
 
-# ========= 1. 轉播推流（暫時簡化版） =========
+# ========= 1. 轉播推流 =========
 
 manual_relay() {
   clear
@@ -394,7 +412,7 @@ auto_relay() {
     return
   fi
 
-  read -rp "請輸入斷線判定秒數（例如 300，超過則視為本場結束）： " offline_sec
+  read -rp "請輸入斷線重連時長秒數（例如 300）： " offline_sec
   offline_sec=${offline_sec:-300}
 
   local idx
@@ -403,13 +421,14 @@ auto_relay() {
   local log_file="$LOG_DIR/${screen_name}.log"
 
   local py="$BASE_DIR/venv/bin/python"
-  local cmd="$py \"$BASE_DIR/magic_autostream.py\" --source-url \"$src_url\" --title \"$title\" --offline-seconds \"$offline_sec\" --auth-dir \"$YTAUTH_DIR\" 2>&1 | tee \"$log_file\""
+  # 注意：這裡使用 --reconnect-seconds，和 magic_autostream.py 的 usage 一致
+  local cmd="$py \"$BASE_DIR/magic_autostream.py\" --source-url \"$src_url\" --title \"$title\" --reconnect-seconds \"$offline_sec\" 2>&1 | tee \"$log_file\""
 
   clear
   echo -e "${CYAN}Magic Stream -> 1.2 自動推流（YouTube API）${RESET}"
   echo "源地址：$src_url"
   echo "標題：$title"
-  echo "斷線判定秒數：$offline_sec"
+  echo "斷線重連時長（秒）：$offline_sec"
   echo "screen 會話名：$screen_name"
   echo "日誌文件：$log_file"
   echo
