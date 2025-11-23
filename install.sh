@@ -10,7 +10,7 @@ RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 INSTALL_DIR="$HOME/magic_stream"
 
 # 你想用的命令名：以後在終端輸入這個單詞
-BIN_CMD_NAME="mc"
+BIN_CMD_NAME="ms"
 BIN_PATH="/usr/local/bin/$BIN_CMD_NAME"
 ########################################
 
