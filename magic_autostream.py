@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Magic Stream 自動轉播腳本 v0.7.2 (授权验证版)
-集成在线机器码验证与防破解逻辑
+Magic Stream 自動轉播腳本 v0.7.3 (授权验证版)
 """
 
 import argparse
@@ -13,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-import requests  # 必須安裝: pip install requests
+import requests  # 必須安裝
 import uuid
 import hashlib
 from typing import Tuple
@@ -24,9 +23,9 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
 # ==========================================
-#  🔴 授权验证配置 (已自动修复为最新版链接)
+#  🔴 授权验证配置
 # ==========================================
-# 这里使用的是去掉了 commit hash 的干净链接，确保始终读取 Gist 的最新内容
+# 指向最新版 whitelist.txt
 LICENSE_URL = "https://gist.githubusercontent.com/DeepSeaHK/ba229af821aeae0d7501047523589ab5/raw/whitelist.txt"
 # ==========================================
 
@@ -34,7 +33,6 @@ def get_machine_code():
     """生成唯一机器码 (MAC + 盐值)"""
     node = uuid.getnode()
     mac = ':'.join(['{:02x}'.format((node >> ele) & 0xff) for ele in range(0,8*6,8)][::-1])
-    # 这里的 magic_stream_..._v1 是盐值，防止被轻易反推
     signature = f"magic_stream_{mac}_v1"
     return hashlib.md5(signature.encode()).hexdigest()
 
@@ -43,19 +41,15 @@ def verify_license():
     code = get_machine_code()
     print("-" * 50)
     print(f"[系統] 正在驗證授權許可...")
-    # 這裡用黃色高亮顯示機器碼，方便客戶複製
     print(f"[系統] 本機機器碼: \033[33m{code}\033[0m") 
 
     try:
-        # 设置 10 秒超时，避免网络不好卡住
         resp = requests.get(LICENSE_URL, timeout=10)
         
         if resp.status_code != 200:
             print(f"[錯誤] 無法連接授權服務器 (Status: {resp.status_code})")
-            print("請檢查 VPS 網絡連接。")
             sys.exit(1)
             
-        # 核心判斷：Gist 内容里是否包含本机机器码
         if code in resp.text:
             print("\033[32m[驗證成功] 正版授權已激活！\033[0m")
             print("-" * 50)
@@ -70,7 +64,7 @@ def verify_license():
         print(f"[錯誤] 驗證過程發生異常: {e}")
         sys.exit(1)
 
-# ---------------- 下面是原有的轉播功能代碼 ----------------
+# ---------------- 核心功能模块 ----------------
 
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
@@ -99,7 +93,6 @@ def get_youtube_service(auth_dir: str):
     return build("youtube", "v3", credentials=creds)
 
 def create_broadcast_and_stream(youtube, title: str, privacy: str) -> Tuple[str, str, str]:
-    # 修正时间格式
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     print(f"[API] 建立直播: {title} ({privacy})")
     
@@ -181,7 +174,7 @@ def run_ffmpeg_once(source_url: str, rtmp_url: str) -> int:
     return proc.returncode
 
 def main():
-    # 🔴 启动时首先进行验证
+    # 🔴 启动验证
     verify_license()
 
     parser = argparse.ArgumentParser()
@@ -193,7 +186,7 @@ def main():
     args = parser.parse_args()
 
     print("==========================================")
-    print(" Magic Stream Auto - v0.7.2")
+    print(" Magic Stream Auto - v0.7.3")
     print("==========================================")
 
     youtube = get_youtube_service(args.auth_dir)
