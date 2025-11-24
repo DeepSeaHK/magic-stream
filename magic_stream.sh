@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-# Magic Stream 直播推流腳本  v0.7.1 (Stable)
+# Magic Stream 直播推流腳本  v0.7.3 (Stable)
 # ============================================
 
 # 注意：移除了 set -e 以防止非致命錯誤導致腳本閃退
@@ -16,7 +16,7 @@ RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 C_RESET="\e[0m"
 C_TITLE="\e[38;5;51m"
 C_MENU="\e[38;5;45m"
-C_WARN="\e[38;5;214m"
+C_WARN="\e[38;5;220m" # 改亮黃色，更顯眼
 C_ERR="\e[31m"
 C_OK="\e[32m"
 C_DIM="\e[90m"
@@ -39,8 +39,7 @@ draw_header() {
   echo " | |  | |/ ___ \ |_| || | |___ "
   echo " |_|  |_/_/   \_\____|___\____|"
   echo "------------------------------------------------------------"
-  echo "            Magic Stream 直播推流腳本  v0.7.1 (Stable)"
-  # 注意：這裡加上了 -e 修復了之前的顯示 bug
+  echo "            Magic Stream 直播推流腳本  v0.7.3 (Stable)"
   echo -e "============================================================${C_RESET}"
   echo
 }
@@ -108,7 +107,7 @@ menu_relay() {
   done
 }
 
-# 1.1 手動 RTMP 轉播 (已增強：斷線重連版)
+# 1.1 手動 RTMP 轉播 (防掉線版)
 relay_manual_rtmp() {
   ensure_ffmpeg
   draw_header
@@ -137,19 +136,19 @@ relay_manual_rtmp() {
   SCREEN_NAME=$(next_screen_name "ms_manual")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
-  # 这里的 CMD 改成了死循环结构
+  # 死循環重連邏輯，注意日期轉義
   local CMD
   CMD="while true; do \
-  echo \"[\$(date)] 正在啟動 FFmpeg 推流...\"; \
-  ffmpeg -re -i \"$SOURCE_URL\" -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\"; \
-  echo \"[\$(date)] 推流意外中斷，10 秒後重新連接...\"; \
-  sleep 10; \
-done"
+    echo \"[\$(date)] 正在啟動 FFmpeg 推流...\"; \
+    ffmpeg -re -i \"$SOURCE_URL\" -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\"; \
+    echo \"[\$(date)] 推流意外中斷，10 秒後重新連接...\"; \
+    sleep 10; \
+  done"
 
   screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
 
   echo
-  echo -e "${C_OK}已啟動防掉線轉播 [$SCREEN_NAME]。${C_RESET}"
+  echo -e "${C_OK}已啟動手動轉播 [$SCREEN_NAME]。${C_RESET}"
   echo -e "${C_DIM}提示：此模式除非手動停止 (菜單 4.4)，否則會一直嘗試重連。${C_RESET}"
   pause_return
 }
@@ -312,7 +311,8 @@ install_yt_api_deps() {
 
   source venv/bin/activate
   pip install --upgrade pip
-  pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+  # 增加了 requests 依賴
+  pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 requests
   deactivate
   echo -e "${C_OK}安裝完成。${C_RESET}"
 }
@@ -435,6 +435,44 @@ menu_update() {
   esac
 }
 
+# ---------------- 6. 功能授權 ----------------
+
+show_license_info() {
+  draw_header
+  echo -e "${C_MENU}Magic Stream -> 6. 功能授權${C_RESET}"
+  echo
+  
+  # 使用 Python 實時計算機器碼，確保與主程序一致
+  local PY_CMD="$PYTHON_BIN"
+  # 如果 venv 裡的 python 不存在，嘗試用系統的
+  if [ ! -x "$PY_CMD" ]; then PY_CMD="python3"; fi
+  
+  # 檢查 python 是否可用
+  if ! command -v "$PY_CMD" >/dev/null 2>&1; then
+    echo -e "${C_ERR}[錯誤] 找不到 Python 環境，無法計算機器碼。請先執行安裝步驟。${C_RESET}"
+    pause_return
+    return
+  fi
+
+  echo "正在讀取本機機器碼..."
+  
+  # 嵌入一段 Python 代碼來計算 ID (邏輯與 magic_autostream.py 完全一致)
+  local MACHINE_ID
+  MACHINE_ID=$($PY_CMD -c "import uuid, hashlib; node = uuid.getnode(); mac = ':'.join(['{:02x}'.format((node >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]); signature = f'magic_stream_{mac}_v1'; print(hashlib.md5(signature.encode()).hexdigest())")
+  
+  echo
+  echo -e "============================================"
+  echo -e " 本機機器碼: ${C_WARN}${MACHINE_ID}${C_RESET}"
+  echo -e "============================================"
+  echo
+  echo "請複製上方黃色機器碼，發送給管理員進行授權。"
+  echo "授權通過後，即可使用「2. 自動轉播」功能。"
+  echo
+  pause_return
+}
+
+# ---------------- 主選單 ----------------
+
 main_menu() {
   while true; do
     draw_header
@@ -445,6 +483,7 @@ main_menu() {
     echo "3. 直播系統安裝"
     echo "4. 推流進程管理"
     echo "5. 更新腳本"
+    echo "6. 功能授權 (查看機器碼)"
     echo "0. 退出"
     echo
     read -rp "請選擇: " choice
@@ -454,6 +493,7 @@ main_menu() {
       3) menu_install ;;
       4) menu_process ;;
       5) menu_update ;;
+      6) show_license_info ;;
       0) exit 0 ;;
       *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
     esac
