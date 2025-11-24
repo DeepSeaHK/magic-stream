@@ -1,252 +1,387 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+Magic Stream 自動轉播腳本
+
+功能：
+- 探針監測直播源（HTTP-FLV / m3u8 等），每 N 秒探測一次
+- 源開播 -> 自動建立 YouTube 直播 & RTMP 串流 -> ffmpeg 推流
+- 中途斷線：在「重連窗口」內自動重連，同一個直播間
+- 斷線超過重連窗口：將本場直播標記 complete，下一次開播自動開新直播間
+"""
+
 import argparse
+import datetime
+import logging
 import os
-import re
+import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from pathlib import Path
 
+import requests
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
-
-
-def log(msg: str) -> None:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now}] {msg}", flush=True)
+SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
 
-def get_youtube(auth_dir: str):
-    token_path = os.path.join(auth_dir, "token.json")
-    if not os.path.exists(token_path):
-        raise RuntimeError(f"找不到 token.json: {token_path}")
-
-    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-    return build("youtube", "v3", credentials=creds)
+# ------------------ YouTube API ------------------
 
 
-def create_broadcast_and_stream(youtube, title: str, privacy_status: str = "unlisted"):
-    """建立一場新的直播 + 推流串流，並回傳 (broadcast_id, rtmp_url)"""
-    now = datetime.now(timezone.utc).isoformat()
+def get_credentials(auth_dir: Path) -> Credentials:
+  auth_dir.mkdir(parents=True, exist_ok=True)
+  token_path = auth_dir / "token.json"
+  secret_path = auth_dir / "client_secret.json"
 
-    log("建立 YouTube 直播 broadcast ...")
-    b_req = youtube.liveBroadcasts().insert(
-        part="snippet,contentDetails,status",
-        body={
-            "snippet": {
-                "title": title,
-                "scheduledStartTime": now,
-            },
-            "status": {"privacyStatus": privacy_status},
-            "contentDetails": {
-                "monitorStream": {"enableMonitorStream": True}
-            },
+  creds = None
+  if token_path.exists():
+    creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+
+  if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+      logging.info("刷新 YouTube token ...")
+      creds.refresh(Request())
+    else:
+      if not secret_path.exists():
+        raise FileNotFoundError(f"找不到 client_secret.json：{secret_path}")
+      logging.info("首次授權，請依照提示在瀏覽器中完成登入 ...")
+      flow = InstalledAppFlow.from_client_secrets_file(str(secret_path), SCOPES)
+      creds = flow.run_console()
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+
+  return creds
+
+
+def create_broadcast_and_stream(youtube, title: str, privacy_status: str):
+  now = datetime.datetime.utcnow().isoformat("T") + "Z"
+
+  logging.info("建立 YouTube 直播間 ...")
+  broadcast = (
+    youtube.liveBroadcasts()
+    .insert(
+      part="snippet,contentDetails,status",
+      body={
+        "snippet": {
+          "title": title,
+          "scheduledStartTime": now,
         },
-    )
-    broadcast = b_req.execute()
-    broadcast_id = broadcast["id"]
-
-    log("建立 YouTube 推流 liveStream ...")
-    s_req = youtube.liveStreams().insert(
-        part="snippet,cdn",
-        body={
-            "snippet": {"title": title},
-            "cdn": {
-                "frameRate": "30fps",
-                "ingestionType": "rtmp",
-                "resolution": "variable",
-            },
+        "status": {"privacyStatus": privacy_status},
+        "contentDetails": {
+          "monitorStream": {"enableMonitorStream": False},
         },
+      },
     )
-    stream = s_req.execute()
-    stream_id = stream["id"]
+    .execute()
+  )
 
-    log("綁定 broadcast 與 liveStream ...")
-    youtube.liveBroadcasts().bind(
-        part="id,contentDetails",
-        id=broadcast_id,
-        streamId=stream_id,
+  logging.info("建立 RTMP 串流 ...")
+  stream = (
+    youtube.liveStreams()
+    .insert(
+      part="snippet,cdn,contentDetails",
+      body={
+        "snippet": {"title": title},
+        "cdn": {
+          "ingestionType": "rtmp",
+          "resolution": "variable",
+          "frameRate": "variable",
+        },
+      },
+    )
+    .execute()
+  )
+
+  logging.info("綁定直播間與串流 ...")
+  youtube.liveBroadcasts().bind(
+    part="id,contentDetails",
+    id=broadcast["id"],
+    streamId=stream["id"],
+  ).execute()
+
+  ingestion = stream["cdn"]["ingestionInfo"]
+  rtmp_url = f"{ingestion['ingestionAddress']}/{ingestion['streamName']}"
+
+  logging.info("建立完成，直播 ID：%s", broadcast["id"])
+  logging.info("RTMP 推流地址：%s", rtmp_url)
+
+  return broadcast["id"], rtmp_url
+
+
+def transition_broadcast(youtube, broadcast_id: str, status: str):
+  try:
+    youtube.liveBroadcasts().transition(
+      part="status", id=broadcast_id, broadcastStatus=status
     ).execute()
-
-    ingestion = stream["cdn"]["ingestionInfo"]
-    rtmp_url = f"{ingestion['ingestionAddress']}/{ingestion['streamName']}"
-
-    log(f"建立完成，broadcast_id={broadcast_id}")
-    log(f"RTMP 推流地址: {rtmp_url}")
-    return broadcast_id, rtmp_url
+    logging.info("已將直播 %s 狀態切換為 %s", broadcast_id, status)
+  except Exception as e:  # noqa: BLE001
+    logging.warning("切換直播狀態失敗：%s", e)
 
 
-def wait_for_source_online(source_url: str, check_interval: int):
-    """循環探測直播源是否可用，直到成功為止"""
-    while True:
-        log(f"檢查直播源是否在線: {source_url}")
-        # 用 ffmpeg 探測 3 秒，如果成功返回 0，代表源可讀
-        cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-t",
-            "3",
-            "-i",
-            source_url,
-            "-f",
-            "null",
-            "-",
-        ]
-        try:
-            result = subprocess.run(cmd)
-            if result.returncode == 0:
-                log("直播源已在線，可以開播。")
-                return
-            else:
-                log(f"直播源暫時無法讀取 (returncode={result.returncode})")
-        except FileNotFoundError:
-            log("錯誤：找不到 ffmpeg 指令，請先安裝 ffmpeg。")
-            raise
-
-        log(f"{check_interval} 秒後再次檢查 ...")
-        time.sleep(check_interval)
+# ------------------ 探針 & ffmpeg ------------------
 
 
-def run_single_broadcast(youtube, args):
-    """
-    開啟一場 YouTube 直播：
-    - 建立 broadcast & stream
-    - 啟動 ffmpeg 推流
-    - 監控 ffmpeg 輸出，若 offline_seconds 內沒新畫面，則視為結束
-    """
-    broadcast_id, rtmp_url = create_broadcast_and_stream(youtube, args.title)
+def probe_source_http(url: str, timeout: int = 5) -> bool:
+  """HTTP 探針：適用 http(s) / flv / m3u8 等，僅做存活檢查。"""
+  try:
+    resp = requests.get(url, stream=True, timeout=timeout)
+    # 只讀幾 KB 測試是否有資料輸出
+    chunk = next(resp.iter_content(chunk_size=1024), None)
+    resp.close()
+    if chunk:
+      logging.debug("探針：源有數據流動。")
+      return True
+    logging.debug("探針：源暫無數據。")
+    return False
+  except Exception as e:  # noqa: BLE001
+    logging.debug("探針失敗：%s", e)
+    return False
 
-    ff_cmd = [
-        "ffmpeg",
-        "-reconnect",
-        "1",
-        "-reconnect_streamed",
-        "1",
-        "-reconnect_on_network_error",
-        "1",
-        "-i",
-        args.source_url,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "copy",
-        "-f",
-        "flv",
-        rtmp_url,
-    ]
 
-    log("啟動 ffmpeg 推流：")
-    log(" ".join(ff_cmd))
+def start_ffmpeg(source_url: str, rtmp_url: str) -> subprocess.Popen:
+  """
+  啟動 ffmpeg 轉推：
+  - 盡量保持原始碼流（-c copy），只做容器轉封裝
+  - 啟用自動重連參數
+  """
+  cmd = [
+    "ffmpeg",
+    "-reconnect",
+    "1",
+    "-reconnect_streamed",
+    "1",
+    "-reconnect_delay_max",
+    "5",
+    "-i",
+    source_url,
+    "-c",
+    "copy",
+    "-f",
+    "flv",
+    rtmp_url,
+  ]
+  logging.info("啟動 ffmpeg：%s", " ".join(cmd))
+  return subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stdout)
 
-    proc = subprocess.Popen(
-        ff_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
+
+# ------------------ 主邏輯：探針 + 重連窗口 ------------------
+
+
+class AutoRelay:
+  def __init__(
+    self,
+    source_url: str,
+    youtube,
+    title: str,
+    reconnect_seconds: int,
+    probe_interval: int,
+    privacy_status: str,
+  ):
+    self.source_url = source_url
+    self.youtube = youtube
+    self.title = title
+    self.reconnect_seconds = reconnect_seconds
+    self.probe_interval = probe_interval
+    self.privacy_status = privacy_status
+
+    self.current_broadcast_id: str | None = None
+    self.current_rtmp_url: str | None = None
+    self.ffmpeg_proc: subprocess.Popen | None = None
+
+    self.last_live_end: float | None = None
+    self._stop = False
+
+  # ---- 信號處理 ----
+  def stop(self, *_):
+    logging.info("收到停止信號，正在清理 ...")
+    self._stop = True
+    if self.ffmpeg_proc and self.ffmpeg_proc.poll() is None:
+      try:
+        self.ffmpeg_proc.terminate()
+      except Exception:
+        pass
+
+  # ---- 狀態機 ----
+
+  def _wait_for_source_online(self):
+    """阻塞等待直播源開播。"""
+    logging.info("探針啟動，開始輪詢直播源 ...")
+    while not self._stop:
+      if probe_source_http(self.source_url):
+        logging.info("探針：檢測到直播源在線。")
+        return
+      logging.info("直播源離線，%d 秒後重試 ...", self.probe_interval)
+      time.sleep(self.probe_interval)
+
+  def _ensure_broadcast(self):
+    if self.current_broadcast_id and self.current_rtmp_url:
+      return
+    self.current_broadcast_id, self.current_rtmp_url = create_broadcast_and_stream(
+      self.youtube, self.title, self.privacy_status
     )
 
-    last_progress_ts = time.time()
-    last_frame = None
-    offline_seconds = args.offline_seconds
-    frame_re = re.compile(r"frame=\s*(\d+)")
-
+  def _run_ffmpeg_until_stop(self):
+    assert self.current_rtmp_url is not None
+    self.ffmpeg_proc = start_ffmpeg(self.source_url, self.current_rtmp_url)
+    start_time = time.time()
     try:
-        for line in proc.stdout:
-            # 同步輸出到當前 log（方便 tail -f 查）
-            sys.stdout.write(line)
-
-            m = frame_re.search(line)
-            if m:
-                frame = int(m.group(1))
-                if last_frame is None or frame != last_frame:
-                    last_frame = frame
-                    last_progress_ts = time.time()
-
-            # watchdog：若超過 offline_seconds 沒有新 frame，視為直播結束
-            if time.time() - last_progress_ts > offline_seconds:
-                log(
-                    f"{offline_seconds} 秒沒有新畫面，判定本場直播已結束，準備關閉 ffmpeg。"
-                )
-                proc.kill()
-                break
-    except Exception as e:
-        log(f"讀取 ffmpeg 輸出時發生錯誤: {e}")
+      while not self._stop:
+        ret = self.ffmpeg_proc.poll()
+        if ret is None:
+          time.sleep(5)
+          continue
+        # ffmpeg 已退出
+        break
     finally:
-        try:
-            proc.wait(timeout=10)
-        except Exception:
-            proc.kill()
+      end_time = time.time()
+      self.last_live_end = end_time
+      uptime = end_time - start_time
+      logging.info("ffmpeg 已退出，本輪推流持續 %.1f 秒。", uptime)
 
-    # 把這場直播標記為 complete
-    try:
-        log(f"將 broadcast {broadcast_id} 標記為 complete ...")
-        youtube.liveBroadcasts().transition(
-            broadcastStatus="complete",
-            part="id,status",
-            id=broadcast_id,
-        ).execute()
-        log(f"broadcast {broadcast_id} 已標記為 complete。")
-    except HttpError as e:
-        log(f"標記 broadcast complete 失敗: {e}")
+  def run(self):
+    """
+    狀態機：
+    idle -> source online -> 建立直播間 -> pushing
+    pushing -> ffmpeg 退出 -> waiting_reconnect
+    waiting_reconnect:
+       - 若超過 reconnect_seconds，complete 本場直播 -> idle
+       - 若未超時且源重新在線 -> 重啟 ffmpeg（同一直播間）
+    """
+    logging.info(
+      "自動轉播啟動，重連窗口：%d 秒，探針間隔：%d 秒，隱私：%s",
+      self.reconnect_seconds,
+      self.probe_interval,
+      self.privacy_status,
+    )
+    state = "idle"
 
-    log("本場直播流程結束。")
+    while not self._stop:
+      if state == "idle":
+        self.current_broadcast_id = None
+        self.current_rtmp_url = None
+        logging.info("狀態：idle，等待主播開播 ...")
+        self._wait_for_source_online()
+        if self._stop:
+          break
+        self._ensure_broadcast()
+        state = "pushing"
+
+      elif state == "pushing":
+        logging.info("狀態：pushing，開始推流 ...")
+        self._run_ffmpeg_until_stop()
+        if self._stop:
+          break
+        state = "waiting_reconnect"
+
+      elif state == "waiting_reconnect":
+        if self.last_live_end is None:
+          state = "idle"
+          continue
+
+        elapsed = time.time() - self.last_live_end
+        if elapsed > self.reconnect_seconds:
+          logging.info(
+            "斷線已超過重連窗口 (%d 秒 > %d 秒)，視為本場直播結束。",
+            int(elapsed),
+            self.reconnect_seconds,
+          )
+          if self.current_broadcast_id:
+            transition_broadcast(self.youtube, self.current_broadcast_id, "complete")
+          state = "idle"
+          continue
+
+        logging.info(
+          "等待主播重新開播（已離線 %.0f 秒 / 窗口 %d 秒）...",
+          elapsed,
+          self.reconnect_seconds,
+        )
+        if probe_source_http(self.source_url):
+          logging.info("探針：源重新在線，在同一直播間內重啟 ffmpeg。")
+          state = "pushing"
+        else:
+          time.sleep(self.probe_interval)
+
+    logging.info("自動轉播進程結束。")
+
+
+# ------------------ CLI ------------------
+
+
+def parse_args():
+  p = argparse.ArgumentParser(
+    description="Magic Stream 自動轉播腳本（探針 + YouTube API + ffmpeg 重連）"
+  )
+  p.add_argument("--source-url", required=True, help="直播源地址（http-flv / m3u8 等）")
+  p.add_argument("--title", required=True, help="YouTube 直播標題")
+  p.add_argument(
+    "--reconnect-seconds",
+    type=int,
+    default=300,
+    help="斷線重連窗口（秒），超過視為本場直播結束",
+  )
+  p.add_argument(
+    "--probe-interval",
+    type=int,
+    default=30,
+    help="探針檢測間隔（秒）",
+  )
+  p.add_argument(
+    "--privacy-status",
+    choices=["public", "unlisted", "private"],
+    default="unlisted",
+    help="直播隱私狀態",
+  )
+  p.add_argument(
+    "--auth-dir",
+    default=str(Path(__file__).resolve().parent / "youtube_auth"),
+    help="存放 client_secret.json / token.json 的目錄",
+  )
+  p.add_argument(
+    "--log-level",
+    default="info",
+    choices=["debug", "info", "warning", "error"],
+    help="日誌等級",
+  )
+  return p.parse_args()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Magic Stream 自動轉播腳本")
-    parser.add_argument("--source-url", required=True, help="抖音等平台的 FLV 直播源 URL")
-    parser.add_argument("--title", default="Magic Stream Live", help="YouTube 直播標題")
-    parser.add_argument(
-        "--reconnect-seconds",
-        type=int,
-        default=60,
-        help="當直播源不在線時，多久檢查一次（秒）",
-    )
-    parser.add_argument(
-        "--offline-seconds",
-        type=int,
-        default=300,
-        help="若超過這麼多秒沒有新畫面，視為本場直播結束（秒）",
-    )
-    parser.add_argument(
-        "--auth-dir",
-        default="youtube_auth",
-        help="存放 client_secret.json / token.json 的目錄",
-    )
-    args = parser.parse_args()
+  args = parse_args()
 
-    log(f"啟動 Magic Stream 自動轉播")
-    log(f"source-url       = {args.source_url}")
-    log(f"title            = {args.title}")
-    log(f"reconnectSeconds = {args.reconnect_seconds}")
-    log(f"offlineSeconds   = {args.offline_seconds}")
-    log(f"authDir          = {args.auth_dir}")
+  logging.basicConfig(
+    level=getattr(logging, args.log_level.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+  )
 
-    youtube = get_youtube(args.auth_dir)
+  auth_dir = Path(args.auth_dir)
+  creds = get_credentials(auth_dir)
+  youtube = build("youtube", "v3", credentials=creds)
 
-    # 主循環：直播源每次開播 -> 開一場 YouTube 直播；結束 -> 等下一次
-    while True:
-        # 1. 等直播源上線
-        wait_for_source_online(args.source_url, args.reconnect_seconds)
+  relay = AutoRelay(
+    source_url=args.source_url,
+    youtube=youtube,
+    title=args.title,
+    reconnect_seconds=args.reconnect_seconds,
+    probe_interval=args.probe_interval,
+    privacy_status=args.privacy_status,
+  )
 
-        # 2. 跑一場直播
-        try:
-            run_single_broadcast(youtube, args)
-        except Exception as e:
-            log(f"本場直播過程中發生錯誤: {e}")
+  # 信號處理
+  signal.signal(signal.SIGINT, relay.stop)
+  signal.signal(signal.SIGTERM, relay.stop)
 
-        # 3. 稍微休息一下再開始下一輪檢查
-        log(f"等待 {args.reconnect_seconds} 秒後再次檢查是否有新一場直播 ...")
-        time.sleep(args.reconnect_seconds)
+  try:
+    relay.run()
+  except KeyboardInterrupt:
+    relay.stop()
+  finally:
+    logging.info("腳本已退出。")
 
 
 if __name__ == "__main__":
-    main()
+  main()
