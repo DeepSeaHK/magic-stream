@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-# Magic Stream 直播推流腳本  v0.7.0 (Stable)
+# Magic Stream 直播推流腳本  v0.7.1 (Stable)
 # ============================================
 
 # 注意：移除了 set -e 以防止非致命錯誤導致腳本閃退
@@ -33,14 +33,15 @@ draw_header() {
   clear
   echo -e "${C_TITLE}"
   echo "============================================================"
-  echo "   ████   ███   █  █  ███   ███   ████   ███   ████  ████ "
-  echo "   █     █   █  ██ █ █   █ █   █  █   █ █   █  █     █    "
-  echo "   ███   █   █  █ ██ █   █ █   █  ████  █   █  ███   ███  "
-  echo "   █     █   █  █  █ █   █ █   █  █   █ █   █  █        █ "
-  echo "   █      ███   █  █  ███   ███   ████   ███   ████ ████ "
+  echo "  __  __    _    ____ ___ ____ "
+  echo " |  \/  |  / \  / ___|_ _/ ___|"
+  echo " | |\/| | / _ \| |  _ | | |    "
+  echo " | |  | |/ ___ \ |_| || | |___ "
+  echo " |_|  |_/_/   \_\____|___\____|"
   echo "------------------------------------------------------------"
-  echo "            Magic Stream 直播推流腳本  v0.7.0 (Stable)"
- echo -e "============================================================${C_RESET}"
+  echo "            Magic Stream 直播推流腳本  v0.7.1 (Stable)"
+  # 注意：這裡加上了 -e 修復了之前的顯示 bug
+  echo -e "============================================================${C_RESET}"
   echo
 }
 
@@ -76,7 +77,7 @@ ensure_python_venv() {
 next_screen_name() {
   local prefix="$1"
   local max_id
-  # 增加 || true 防止 grep 失敗導致報錯（雖然移除了 set -e，但這是好習慣）
+  # 增加 || true 防止 grep 失敗導致報錯
   max_id=$(screen -ls 2>/dev/null | grep -o "${prefix}_[0-9]\+" | sed 's/.*_//' | sort -n | tail -n1 || true)
   if [ -z "$max_id" ]; then
     max_id=1
@@ -203,7 +204,7 @@ relay_auto_youtube() {
   SCREEN_NAME=$(next_screen_name "ms_auto")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
-  # 注意：增加了 -u 參數讓 Python 實時輸出日誌
+  # 注意：Python 增加 -u 參數
   local CMD
   CMD="cd \"$INSTALL_DIR\" && \"$PYTHON_BIN\" -u \"$INSTALL_DIR/magic_autostream.py\" \
     --source-url \"$SOURCE_URL\" \
@@ -417,8 +418,11 @@ menu_update() {
       
       mv magic_stream.sh.tmp magic_stream.sh
       chmod +x magic_stream.sh magic_autostream.py
-      echo -e "${C_OK}更新完成，請重新運行腳本。${C_RESET}"
-      exit 0
+      echo -e "${C_OK}更新完成，正在重啟腳本...${C_RESET}"
+      
+      # 延遲 1 秒後，使用 exec 替換當前進程，實現自動重啟
+      sleep 1
+      exec "$0" "$@"
       ;;
     *) echo "已取消。"; pause_return ;;
   esac
