@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Magic Stream 主腳本 v0.4.1
+# Magic Stream 主腳本 v0.5.1
 
 # ========= 全局設置 =========
 BASE_DIR="$HOME/magic_stream"
