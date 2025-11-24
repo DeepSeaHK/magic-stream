@@ -36,7 +36,8 @@ cd "$INSTALL_DIR"
 if ! command -v curl >/dev/null 2>&1; then
   echo "未找到 curl，正在安裝..."
   if command -v apt >/dev/null 2>&1; then
-    $SUDO apt update
+    # 加上 || true 防止 apt update 報錯導致腳本退出
+    $SUDO apt update || true
     $SUDO apt install -y curl
   else
     echo "系統沒有 apt，請手動安裝 curl 後重試。"
@@ -56,7 +57,7 @@ chmod +x magic_autostream.py
 echo
 echo "安裝系統依賴 (ffmpeg, python3, pip, screen)..."
 if command -v apt >/dev/null 2>&1; then
-  $SUDO apt update
+  $SUDO apt update || true
   $SUDO apt install -y ffmpeg python3 python3-pip python3-venv screen
 else
   echo "非 Debian/Ubuntu 系統，請自行安裝 ffmpeg / python3 / pip / screen / python3-venv。"
@@ -89,17 +90,21 @@ else
   echo "未找到 python3，請稍後在菜單中先安裝 Python 環境。"
 fi
 
-# 提示放置憑證的說明
-if [ ! -f "$INSTALL_DIR/youtube_auth/README.txt" ]; then
-  cat > "$INSTALL_DIR/youtube_auth/README.txt" <<EOF
-請將 YouTube 的 OAuth 憑證放在本目錄下：
-  $INSTALL_DIR/youtube_auth
+# 提示放置憑證的說明（已更新為新策略說明）
+cat > "$INSTALL_DIR/youtube_auth/README.txt" <<EOF
+【重要說明】
+由於 Google 安全策略限制，無法在 VPS 上直接生成 Token。
 
-文件名必須是：
+請按照以下步驟操作：
+1. 在你的「本地電腦」(Windows/Mac) 上運行一次腳本進行授權。
+2. 生成 client_secret.json 和 token.json。
+3. 將這兩個文件上傳到本目錄：
+   $INSTALL_DIR/youtube_auth
+
+文件清單必須包含：
   client_secret.json
   token.json
 EOF
-fi
 
 echo
 echo "建立快捷命令：$BIN_CMD_NAME"
@@ -120,15 +125,16 @@ $SUDO chmod +x "$BIN_PATH"
 
 echo
 echo "========================================"
-echo " Magic Stream 安裝完成！"
+echo -e "\033[32m Magic Stream 安裝完成！ \033[0m"
+echo "========================================"
 echo
-echo " 目錄：$INSTALL_DIR"
-echo " 快捷命令：$BIN_CMD_NAME"
+echo " 安裝路徑：$INSTALL_DIR"
+echo " 快捷指令：$BIN_CMD_NAME"
 echo
-echo " 下一步："
-echo "   1) 把 YouTube 的 client_secret.json 和 token.json 放到："
-echo "        $INSTALL_DIR/youtube_auth"
-echo "   2) 之後只要在終端輸入："
-echo "        $BIN_CMD_NAME"
-echo "      就能呼出 Magic Stream 菜單。"
+echo "【關鍵下一步】"
+echo " 1. 請在本地電腦生成 token.json"
+echo " 2. 請將 client_secret.json 和 token.json 上傳到："
+echo -e "    \033[33m$INSTALL_DIR/youtube_auth\033[0m"
+echo
+echo " 完成上傳後，在終端輸入 '$BIN_CMD_NAME' 即可使用。"
 echo "========================================"
