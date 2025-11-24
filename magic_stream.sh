@@ -1,6 +1,3 @@
-mkdir -p /root/magic_stream/logs
-
-cat > /root/magic_stream/magic_stream.sh << 'EOF'
 #!/usr/bin/env bash
 # Magic Stream 直播推流腳本
 VERSION="0.5.1"
@@ -122,56 +119,56 @@ start_probe_stream() {
   fi
 
   screen -dmS "$screen_name" bash -lc '
-    LOG_FILE="'"$log_file"'"
-    SRC_URL="'"$src_url"'"
-    RTMP_URL="'"$rtmp_url"'"
-    PROBE_INTERVAL='"$probe_interval"'
-    STOP_TIMEOUT='"$stop_timeout"'
+LOG_FILE="'"$log_file"'"
+SRC_URL="'"$src_url"'"
+RTMP_URL="'"$rtmp_url"'"
+PROBE_INTERVAL='"$probe_interval"'
+STOP_TIMEOUT='"$stop_timeout"'
 
-    echo "==============================================" >> "$LOG_FILE" 2>&1
-    echo "[info] Magic Stream probe-loop 開始運行" >> "$LOG_FILE" 2>&1
-    echo "[info] 來源: $SRC_URL" >> "$LOG_FILE" 2>&1
-    echo "[info] 目標: $RTMP_URL" >> "$LOG_FILE" 2>&1
-    echo "[info] 探針間隔: ${PROBE_INTERVAL}s, 無訊號超時: ${STOP_TIMEOUT}s" >> "$LOG_FILE" 2>&1
+echo "==============================================" >> "$LOG_FILE" 2>&1
+echo "[info] Magic Stream probe-loop 開始運行" >> "$LOG_FILE" 2>&1
+echo "[info] 來源: $SRC_URL" >> "$LOG_FILE" 2>&1
+echo "[info] 目標: $RTMP_URL" >> "$LOG_FILE" 2>&1
+echo "[info] 探針間隔: ${PROBE_INTERVAL}s, 無訊號超時: ${STOP_TIMEOUT}s" >> "$LOG_FILE" 2>&1
 
-    last_ok=$(date +%s)
+last_ok=$(date +%s)
 
-    while true; do
-      now=$(date +%s)
+while true; do
+  now=$(date +%s)
 
-      ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$SRC_URL" >> "$LOG_FILE" 2>&1
-      probe_status=$?
+  ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$SRC_URL" >> "$LOG_FILE" 2>&1
+  probe_status=$?
 
-      if [ $probe_status -eq 0 ]; then
-        echo "[info] 探針 OK，啟動 ffmpeg 推流..." >> "$LOG_FILE" 2>&1
-        last_ok=$now
+  if [ $probe_status -eq 0 ]; then
+    echo "[info] 探針 OK，啟動 ffmpeg 推流..." >> "$LOG_FILE" 2>&1
+    last_ok=$now
 
-        ffmpeg -re -i "$SRC_URL" -c copy -f flv "$RTMP_URL" >> "$LOG_FILE" 2>&1
-        exit_code=$?
-        echo "[warn] ffmpeg 結束，狀態碼: $exit_code，5 秒後重新檢測來源..." >> "$LOG_FILE" 2>&1
-        sleep 5
-        continue
-      fi
+    ffmpeg -re -i "$SRC_URL" -c copy -f flv "$RTMP_URL" >> "$LOG_FILE" 2>&1
+    exit_code=$?
+    echo "[warn] ffmpeg 結束，狀態碼: $exit_code，5 秒後重新檢測來源..." >> "$LOG_FILE" 2>&1
+    sleep 5
+    continue
+  fi
 
-      echo "[warn] 探針失敗，來源暫時無訊號。" >> "$LOG_FILE" 2>&1
+  echo "[warn] 探針失敗，來源暫時無訊號。" >> "$LOG_FILE" 2>&1
 
-      if [ "$STOP_TIMEOUT" -gt 0 ] 2>/dev/null; then
-        diff=$(( now - last_ok ))
-        if [ $diff -ge "$STOP_TIMEOUT" ]; then
-          echo "[info] 連續無訊號已達 ${STOP_TIMEOUT}s，自動結束本次任務。" >> "$LOG_FILE" 2>&1
-          break
-        fi
-      fi
+  if [ "$STOP_TIMEOUT" -gt 0 ] 2>/dev/null; then
+    diff=$(( now - last_ok ))
+    if [ $diff -ge "$STOP_TIMEOUT" ]; then
+      echo "[info] 連續無訊號已達 ${STOP_TIMEOUT}s，自動結束本次任務。" >> "$LOG_FILE" 2>&1
+      break
+    fi
+  fi
 
-      sleep "$PROBE_INTERVAL"
-    done
+  sleep "$PROBE_INTERVAL"
+done
 
-    echo "[info] Magic Stream probe-loop 結束。" >> "$LOG_FILE" 2>&1
-  '
+echo "[info] Magic Stream probe-loop 結束。" >> "$LOG_FILE" 2>&1
+'
 
   echo
   echo -e "${C_GREEN}已在後台 screen 啟動：${C_BOLD}$screen_name${C_RESET}"
-  echo "可在主選單 4. 查看當前進程 / 5. 查看日誌，或在 6. 關閉指定 screen。"
+  echo "可在主選單 4. 查看當前 screen / 5. 查看日誌，或在 6. 關閉指定 screen。"
   pause
 }
 
@@ -212,22 +209,22 @@ start_vod_loop() {
   fi
 
   screen -dmS "$screen_name" bash -lc '
-    LOG_FILE="'"$log_file"'"
-    FILE_PATH="'"$file_path"'"
-    RTMP_URL="'"$rtmp_url"'"
+LOG_FILE="'"$log_file"'"
+FILE_PATH="'"$file_path"'"
+RTMP_URL="'"$rtmp_url"'"
 
-    echo "==============================================" >> "$LOG_FILE" 2>&1
-    echo "[info] Magic Stream VOD loop 開始運行" >> "$LOG_FILE" 2>&1
-    echo "[info] 檔案: $FILE_PATH" >> "$LOG_FILE" 2>&1
-    echo "[info] 目標: $RTMP_URL" >> "$LOG_FILE" 2>&1
+echo "==============================================" >> "$LOG_FILE" 2>&1
+echo "[info] Magic Stream VOD loop 開始運行" >> "$LOG_FILE" 2>&1
+echo "[info] 檔案: $FILE_PATH" >> "$LOG_FILE" 2>&1
+echo "[info] 目標: $RTMP_URL" >> "$LOG_FILE" 2>&1
 
-    while true; do
-      ffmpeg -re -stream_loop -1 -i "$FILE_PATH" -c copy -f flv "$RTMP_URL" >> "$LOG_FILE" 2>&1
-      exit_code=$?
-      echo "[warn] ffmpeg 意外結束 (code=$exit_code)，5 秒後重啟..." >> "$LOG_FILE" 2>&1
-      sleep 5
-    done
-  '
+while true; do
+  ffmpeg -re -stream_loop -1 -i "$FILE_PATH" -c copy -f flv "$RTMP_URL" >> "$LOG_FILE" 2>&1
+  exit_code=$?
+  echo "[warn] ffmpeg 意外結束 (code=$exit_code)，5 秒後重啟..." >> "$LOG_FILE" 2>&1
+  sleep 5
+done
+'
 
   echo
   echo -e "${C_GREEN}已在後台 screen 啟動：${C_BOLD}$screen_name${C_RESET}"
@@ -326,6 +323,3 @@ EOF
 }
 
 main_menu
-EOF
-
-chmod +x /root/magic_stream/magic_stream.sh
