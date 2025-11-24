@@ -108,11 +108,11 @@ menu_relay() {
   done
 }
 
-# 1.1 手動 RTMP 轉播
+# 1.1 手動 RTMP 轉播 (已增強：斷線重連版)
 relay_manual_rtmp() {
   ensure_ffmpeg
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 1.1 手動 RTMP 轉播${C_RESET}"
+  echo -e "${C_MENU}Magic Stream -> 1.1 手動 RTMP 轉播 (防掉線版)${C_RESET}"
   echo
   read -rp "請輸入直播源 URL（例如 FLV 連結）: " SOURCE_URL
   [ -z "$SOURCE_URL" ] && return
@@ -125,10 +125,11 @@ relay_manual_rtmp() {
 
   # --- 確認環節 ---
   draw_header
-  echo -e "${C_MENU}--- 任務摘要 (手動轉播) ---${C_RESET}"
+  echo -e "${C_MENU}--- 任務摘要 (手動轉播 - 防掉線) ---${C_RESET}"
   echo -e "直播源 URL : ${C_INPUT}$SOURCE_URL${C_RESET}"
   echo -e "推流服務器 : ${C_INPUT}$RTMP_ADDR${C_RESET}"
   echo -e "串流金鑰   : ${C_INPUT}$STREAM_KEY${C_RESET}"
+  echo -e "重連機制   : ${C_OK}已啟用 (斷線後每 10 秒重試)${C_RESET}"
   
   confirm_action || { echo "已取消操作。"; pause_return; return; }
 
@@ -136,14 +137,20 @@ relay_manual_rtmp() {
   SCREEN_NAME=$(next_screen_name "ms_manual")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
+  # 这里的 CMD 改成了死循环结构
   local CMD
-  CMD="ffmpeg -re -i \"$SOURCE_URL\" \
-    -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\""
+  CMD="while true; do \
+  echo \"[\$(date)] 正在啟動 FFmpeg 推流...\"; \
+  ffmpeg -re -i \"$SOURCE_URL\" -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\"; \
+  echo \"[\$(date)] 推流意外中斷，10 秒後重新連接...\"; \
+  sleep 10; \
+done"
 
   screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
 
   echo
-  echo -e "${C_OK}已啟動手動轉播 [$SCREEN_NAME]。${C_RESET}"
+  echo -e "${C_OK}已啟動防掉線轉播 [$SCREEN_NAME]。${C_RESET}"
+  echo -e "${C_DIM}提示：此模式除非手動停止 (菜單 4.4)，否則會一直嘗試重連。${C_RESET}"
   pause_return
 }
 
