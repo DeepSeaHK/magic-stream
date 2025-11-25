@@ -47,6 +47,14 @@ echo "下載核心腳本..."
 curl -fsSL "$RAW_BASE/magic_stream.sh" -o magic_stream.sh
 curl -fsSL "$RAW_BASE/magic_autostream.py" -o magic_autostream.py
 
+# 🔴 新增：手动下载 PyArmor 运行库文件
+# 注意：必须确保你在 GitHub 上上传了 pyarmor_runtime_000000 文件夹
+RUNTIME_DIR="pyarmor_runtime_000000"
+mkdir -p "$RUNTIME_DIR"
+echo "下載運行庫..."
+curl -fsSL "$RAW_BASE/$RUNTIME_DIR/__init__.py" -o "$RUNTIME_DIR/__init__.py"
+curl -fsSL "$RAW_BASE/$RUNTIME_DIR/pyarmor_runtime.so" -o "$RUNTIME_DIR/pyarmor_runtime.so"
+
 chmod +x magic_stream.sh
 chmod +x magic_autostream.py
 
