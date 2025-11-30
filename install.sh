@@ -2,14 +2,14 @@
 set -e
 
 ########################################
-# Magic Stream 商業部署腳本 v1.5 (Zip Install)
+# Magic Stream 商業部署腳本 v1.6 (Auto-Fix)
 ########################################
 RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 INSTALL_DIR="$HOME/magic_stream"
 BIN_CMD_NAME="ms"
 BIN_PATH="/usr/local/bin/$BIN_CMD_NAME"
 
-echo "== Magic Stream 商業版安裝程序 v1.5 =="
+echo "== Magic Stream 商業版安裝程序 v1.6 =="
 echo "安裝目錄: $INSTALL_DIR"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
@@ -39,12 +39,15 @@ curl -fsSL "$RAW_BASE/magic_stream.sh?t=$TS" -o magic_stream.sh
 curl -fsSL "$RAW_BASE/magic_autostream.py?t=$TS" -o magic_autostream.py
 
 echo "正在部署全平台運行庫..."
-# === 核心修改：下載並解壓 runtime.zip ===
-# 舊版腳本沒有這一段，會導致 Google Cloud 報錯
+# === v1.6 核心修復：防止目錄嵌套 ===
+# 先清理舊的運行庫文件夾 (防止衝突)
+rm -rf pyarmor_runtime_000000
+# 下載 zip
 curl -fsSL "$RAW_BASE/runtime.zip?t=$TS" -o runtime.zip
+# 直接解壓到當前目錄 (會自動生成 pyarmor_runtime_000000 文件夾)
 unzip -o -q runtime.zip
 rm runtime.zip
-# ========================================
+# ==================================
 
 chmod +x magic_stream.sh magic_autostream.py
 
