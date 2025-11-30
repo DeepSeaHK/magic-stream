@@ -1,32 +1,24 @@
 #!/bin/bash
 
 # ============================================
-# Magic Stream 直播推流腳本  v0.7.3 (Stable)
+# Magic Stream 直播推流腳本  v0.7.8 (Process Manager Pro)
 # ============================================
 
-# 注意：移除了 set -e 以防止非致命錯誤導致腳本閃退
 INSTALL_DIR="$HOME/magic_stream"
 LOG_DIR="$INSTALL_DIR/logs"
 VOD_DIR="$INSTALL_DIR/vod"
-AUTH_DIR="$INSTALL_DIR/youtube_auth"
-PYTHON_BIN="$INSTALL_DIR/venv/bin/python"
-RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 
 # 顏色定義
 C_RESET="\e[0m"
 C_TITLE="\e[38;5;51m"
 C_MENU="\e[38;5;45m"
-C_WARN="\e[38;5;220m" # 改亮黃色，更顯眼
+C_WARN="\e[38;5;220m"
 C_ERR="\e[31m"
 C_OK="\e[32m"
 C_DIM="\e[90m"
 C_INPUT="\e[38;5;159m"
 
-mkdir -p "$LOG_DIR" "$VOD_DIR" "$AUTH_DIR"
-
-if [ ! -x "$PYTHON_BIN" ]; then
-  PYTHON_BIN="python3"
-fi
+mkdir -p "$LOG_DIR" "$VOD_DIR"
 
 # ------------------ 通用 UI ------------------
 draw_header() {
@@ -39,7 +31,7 @@ draw_header() {
   echo " | |  | |/ ___ \ |_| || | |___ "
   echo " |_|  |_/_/   \_\____|___\____|"
   echo "------------------------------------------------------------"
-  echo "            Magic Stream 直播推流腳本  v0.7.3 (Stable)"
+  echo "            Magic Stream 直播推流腳本  v0.7.8"
   echo -e "============================================================${C_RESET}"
   echo
 }
@@ -67,16 +59,9 @@ ensure_ffmpeg() {
   fi
 }
 
-ensure_python_venv() {
-  if [ ! -x "$INSTALL_DIR/venv/bin/python" ]; then
-    echo -e "${C_WARN}[提示] 尚未建立 Python venv，將使用系統 python3。${C_RESET}"
-  fi
-}
-
 next_screen_name() {
   local prefix="$1"
   local max_id
-  # 增加 || true 防止 grep 失敗導致報錯
   max_id=$(screen -ls 2>/dev/null | grep -o "${prefix}_[0-9]\+" | sed 's/.*_//' | sort -n | tail -n1 || true)
   if [ -z "$max_id" ]; then
     max_id=1
@@ -86,147 +71,70 @@ next_screen_name() {
   printf "%s_%02d" "$prefix" "$max_id"
 }
 
-# ------------- 1. 轉播推流（含自動 / 手動） -------------
+# ------------- 1. 轉播推流 (純淨手動版) -------------
 
 menu_relay() {
   while true; do
     draw_header
     echo -e "${C_MENU}Magic Stream -> 1. 轉播推流${C_RESET}"
     echo
-    echo "1. 手動 RTMP 轉播（YouTube Studio 手動建立直播）"
-    echo "2. 自動轉播（使用 YouTube API 自動開播 + 探針守候）"
+    echo "1. 手動 RTMP 轉播 (輸入連結 -> 直接推流)"
     echo "0. 返回主選單"
     echo
     read -rp "請選擇: " choice
     case "$choice" in
       1) relay_manual_rtmp ;;
-      2) relay_auto_youtube ;;
       0) return ;;
       *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
     esac
   done
 }
 
-# 1.1 手動 RTMP 轉播 (防掉線版)
 relay_manual_rtmp() {
   ensure_ffmpeg
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 1.1 手動 RTMP 轉播 (防掉線版)${C_RESET}"
+  echo -e "${C_MENU}Magic Stream -> 1.1 手動 RTMP 轉播${C_RESET}"
   echo
   read -rp "請輸入直播源 URL（例如 FLV 連結）: " SOURCE_URL
   [ -z "$SOURCE_URL" ] && return
 
-  read -rp "請輸入 RTMP 串流位址（預設 rtmp://a.rtmp.youtube.com/live2）: " TMP_RTMP
+  read -rp "請輸入 RTMP 位址（預設 rtmp://a.rtmp.youtube.com/live2）: " TMP_RTMP
   RTMP_ADDR="${TMP_RTMP:-rtmp://a.rtmp.youtube.com/live2}"
 
   read -rp "請輸入直播串流金鑰（Stream Key）: " STREAM_KEY
   [ -z "$STREAM_KEY" ] && return
 
-  # --- 確認環節 ---
   draw_header
-  echo -e "${C_MENU}--- 任務摘要 (手動轉播 - 防掉線) ---${C_RESET}"
+  echo -e "${C_MENU}--- 任務摘要 (直接推流) ---${C_RESET}"
   echo -e "直播源 URL : ${C_INPUT}$SOURCE_URL${C_RESET}"
-  echo -e "推流服務器 : ${C_INPUT}$RTMP_ADDR${C_RESET}"
-  echo -e "串流金鑰   : ${C_INPUT}$STREAM_KEY${C_RESET}"
-  echo -e "重連機制   : ${C_OK}已啟用 (斷線後每 10 秒重試)${C_RESET}"
+  echo -e "推流目標   : ${C_INPUT}$RTMP_ADDR/$STREAM_KEY${C_RESET}"
+  echo -e "核心優化   : ${C_OK}H.264 流複製 (解決卡頓/黃色警告)${C_RESET}"
   
-  confirm_action || { echo "已取消操作。"; pause_return; return; }
+  confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME
   SCREEN_NAME=$(next_screen_name "ms_manual")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
-  # 死循環重連邏輯，注意日期轉義
   local CMD
   CMD="while true; do \
-    echo \"[\$(date)] 正在啟動 FFmpeg 推流...\"; \
-    ffmpeg -re -i \"$SOURCE_URL\" -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\"; \
-    echo \"[\$(date)] 推流意外中斷，10 秒後重新連接...\"; \
-    sleep 10; \
+    echo \"[\$(date)] 啟動優化推流...\"; \
+    ffmpeg -hide_banner -loglevel error \
+      -user_agent \"Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1\" \
+      -headers \"Referer: https://live.douyin.com/\" \
+      -rw_timeout 10000000 \
+      -i \"$SOURCE_URL\" \
+      -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\"; \
+    echo \"[\$(date)] 直播中斷，5秒後重連...\"; \
+    sleep 5; \
   done"
 
   screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
-
-  echo
-  echo -e "${C_OK}已啟動手動轉播 [$SCREEN_NAME]。${C_RESET}"
-  echo -e "${C_DIM}提示：此模式除非手動停止 (菜單 4.4)，否則會一直嘗試重連。${C_RESET}"
+  echo -e "${C_OK}優化推流已啟動 [$SCREEN_NAME]。${C_RESET}"
   pause_return
 }
 
-# 1.2 自動轉播（YouTube API + 探針）
-relay_auto_youtube() {
-  ensure_ffmpeg
-  ensure_python_venv
-  
-  # 檢查憑證是否存在
-  if [ ! -f "$AUTH_DIR/token.json" ] || [ ! -f "$AUTH_DIR/client_secret.json" ]; then
-    draw_header
-    echo -e "${C_ERR}[錯誤] 找不到憑證文件！${C_RESET}"
-    echo "請確保已上傳 client_secret.json 和 token.json 到："
-    echo -e "${C_WARN}$AUTH_DIR${C_RESET}"
-    pause_return
-    return
-  fi
-
-  draw_header
-  echo -e "${C_MENU}Magic Stream -> 1.2 自動轉播（YouTube API）${C_RESET}"
-  echo
-  read -rp "請輸入直播源 URL（例如 FLV 連結）: " SOURCE_URL
-  [ -z "$SOURCE_URL" ] && return
-
-  read -rp "請輸入 YouTube 直播標題（預設: Magic Stream Live）: " TMP_TITLE
-  TITLE="${TMP_TITLE:-Magic Stream Live}"
-
-  echo
-  echo "請選擇直播隱私狀態："
-  echo "1) 公開 (Public)"
-  echo "2) 不公開 (Unlisted) [預設]"
-  echo "3) 私享 (Private)"
-  read -rp "請選擇 (1-3): " p_choice
-  
-  local PRIVACY
-  case "$p_choice" in
-    1) PRIVACY="public" ;;
-    3) PRIVACY="private" ;;
-    *) PRIVACY="unlisted" ;;
-  esac
-
-  echo
-  read -rp "短暫掉線容忍秒數（預設 300）: " TMP_SEC
-  OFFLINE_SEC="${TMP_SEC:-300}"
-
-  # --- 確認環節 ---
-  draw_header
-  echo -e "${C_MENU}--- 任務摘要 (自動轉播) ---${C_RESET}"
-  echo -e "直播源 URL : ${C_INPUT}$SOURCE_URL${C_RESET}"
-  echo -e "直播標題   : ${C_INPUT}$TITLE${C_RESET}"
-  echo -e "隱私設定   : ${C_INPUT}$PRIVACY${C_RESET}"
-  echo -e "掉線容忍   : ${C_INPUT}${OFFLINE_SEC} 秒${C_RESET}"
-  echo -e "認證目錄   : ${C_DIM}$AUTH_DIR${C_RESET}"
-  
-  confirm_action || { echo "已取消操作。"; pause_return; return; }
-
-  local SCREEN_NAME
-  SCREEN_NAME=$(next_screen_name "ms_auto")
-  local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
-
-  # 注意：Python 增加 -u 參數
-  local CMD
-  CMD="cd \"$INSTALL_DIR\" && \"$PYTHON_BIN\" -u \"$INSTALL_DIR/magic_autostream.py\" \
-    --source-url \"$SOURCE_URL\" \
-    --title \"$TITLE\" \
-    --privacy \"$PRIVACY\" \
-    --reconnect-seconds \"$OFFLINE_SEC\" \
-    --auth-dir \"$AUTH_DIR\""
-
-  screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
-
-  echo
-  echo -e "${C_OK}自動轉播腳本已在後台運行 [$SCREEN_NAME]。${C_RESET}"
-  pause_return
-}
-
-# ---------------- 2. 文件推流 ----------------
+# ------------- 2. 文件推流 (時長/次數控制) -------------
 
 menu_vod() {
   ensure_ffmpeg
@@ -234,268 +142,184 @@ menu_vod() {
   echo -e "${C_MENU}Magic Stream -> 2. 文件推流${C_RESET}"
   echo
   echo "視頻文件目錄：$VOD_DIR"
-  echo
   read -rp "請輸入文件名（含副檔名）: " FILE_NAME
   [ -z "$FILE_NAME" ] && return
-
   local FULL_PATH="$VOD_DIR/$FILE_NAME"
   if [ ! -f "$FULL_PATH" ]; then
-    echo -e "${C_ERR}[錯誤] 找不到檔案：$FULL_PATH${C_RESET}"
-    pause_return
-    return
+    echo -e "${C_ERR}[錯誤] 找不到檔案：$FULL_PATH${C_RESET}"; pause_return; return;
   fi
-
-  read -rp "RTMP 位址（Enter 使用 YouTube 預設）: " TMP_RTMP
-  RTMP_ADDR="${TMP_RTMP:-rtmp://a.rtmp.youtube.com/live2}"
-
+  
   read -rp "請輸入直播串流金鑰: " STREAM_KEY
   [ -z "$STREAM_KEY" ] && return
 
-  # --- 確認環節 ---
+  echo
+  echo "請選擇推流模式："
+  echo "1. 無限循環 (直到手動停止) [預設]"
+  echo "2. 定時停止 (例如推流 60 分鐘後自動關閉)"
+  echo "3. 定次播放 (例如重複播放 4 次後自動關閉)"
+  read -rp "請選擇 (1-3): " mode_choice
+
+  local FFMPEG_OPTS=""
+  local MODE_DESC=""
+
+  case "$mode_choice" in
+    2)
+      read -rp "請輸入推流時長 (分鐘): " mins
+      local secs=$((mins * 60))
+      FFMPEG_OPTS="-stream_loop -1 -t $secs"
+      MODE_DESC="定時停止 ($mins 分鐘)"
+      ;;
+    3)
+      read -rp "請輸入重複次數 (例如 4 代表播完1次再重複4次): " loop_count
+      FFMPEG_OPTS="-stream_loop $loop_count"
+      MODE_DESC="定次播放 (重複 $loop_count 次)"
+      ;;
+    *)
+      FFMPEG_OPTS="-stream_loop -1"
+      MODE_DESC="無限循環 (直到手動停止)"
+      ;;
+  esac
+
   draw_header
   echo -e "${C_MENU}--- 任務摘要 (文件推流) ---${C_RESET}"
   echo -e "文件路徑   : ${C_INPUT}$FULL_PATH${C_RESET}"
-  echo -e "推流服務器 : ${C_INPUT}$RTMP_ADDR${C_RESET}"
-  echo -e "串流金鑰   : ${C_INPUT}$STREAM_KEY${C_RESET}"
+  echo -e "推流模式   : ${C_OK}$MODE_DESC${C_RESET}"
+  echo -e "推流目標   : ...$STREAM_KEY"
   
-  confirm_action || { echo "已取消操作。"; pause_return; return; }
+  confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME
   SCREEN_NAME=$(next_screen_name "ms_vod")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
-  local CMD
-  CMD="ffmpeg -re -stream_loop -1 -i \"$FULL_PATH\" \
-    -c copy -f flv \"$RTMP_ADDR/$STREAM_KEY\""
+  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" -c copy -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
+  local FULL_CMD="$CMD; echo '推流任務已完成，Screen 將在 60 秒後關閉...'; sleep 60"
 
-  screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
+  screen -S "$SCREEN_NAME" -dm bash -c "$FULL_CMD 2>&1 | tee \"$LOG_FILE\""
 
   echo
   echo -e "${C_OK}文件推流已啟動 [$SCREEN_NAME]。${C_RESET}"
+  echo -e "推流結束後，Screen 會自動關閉。"
   pause_return
 }
 
-# ------------- 3. 直播系統安裝 -------------
+# ------------- 4. 推流進程管理 (重大升級：數字選擇) -------------
 
-menu_install() {
-  while true; do
-    draw_header
-    echo -e "${C_MENU}Magic Stream -> 3. 直播系統安裝${C_RESET}"
-    echo
-    echo "1. 系統升級 & 更新  (apt update && upgrade)"
-    echo "2. 安裝 Python3 與 pip"
-    echo "3. 安裝 ffmpeg"
-    echo "4. 建立 Python 環境 (安裝 Google API 依賴)"
-    echo "0. 返回主選單"
-    echo
-    read -rp "請選擇: " choice
-    case "$choice" in
-      1) apt update && apt upgrade -y; pause_return ;;
-      2) apt update; apt install -y python3 python3-venv python3-pip; pause_return ;;
-      3) apt update; apt install -y ffmpeg; pause_return ;;
-      4) install_yt_api_deps; pause_return ;;
-      0) return ;;
-      *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
-    esac
-  done
-}
+process_list_and_kill() {
+  draw_header
+  echo -e "${C_MENU}4.2 停止指定直播${C_RESET}"
+  echo
+  
+  # 獲取所有相關的 screen 會話 (ms_manual, ms_vod, ms_smart, ms_auto)
+  # 使用 mapfile 將 grep 結果存入數組
+  mapfile -t SESSIONS < <(screen -ls | grep -oE "[0-9]+\.ms_(manual|vod|smart|auto)_[0-9]+" | sort)
 
-install_yt_api_deps() {
-  echo -e "${C_MENU}正在設定 Python 環境...${C_RESET}"
-  mkdir -p "$INSTALL_DIR"
-  cd "$INSTALL_DIR" || return
-
-  if [ ! -d "venv" ]; then
-    python3 -m venv venv
+  if [ ${#SESSIONS[@]} -eq 0 ]; then
+    echo -e "${C_WARN}目前沒有運行中的直播進程。${C_RESET}"
+    pause_return
+    return
   fi
 
-  source venv/bin/activate
-  pip install --upgrade pip
-  # 增加了 requests 依賴
-  pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 requests
-  deactivate
-  echo -e "${C_OK}安裝完成。${C_RESET}"
-}
-
-# ------------- 4. 推流進程管理 -------------
-
-menu_process() {
-  while true; do
-    draw_header
-    echo -e "${C_MENU}Magic Stream -> 4. 推流進程管理${C_RESET}"
-    echo
-    echo "1. 查看所有 screen 會話"
-    echo "2. 查看推流狀態（日誌摘要）"
-    echo "3. 進入指定 screen（查看實時 log）"
-    echo "4. 結束指定 screen（停止直播）"
-    echo "0. 返回主選單"
-    echo
-    read -rp "請選擇: " choice
-    case "$choice" in
-      1) process_list ;;
-      2) process_status ;;
-      3) process_attach ;;
-      4) process_kill ;;
-      0) return ;;
-      *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
-    esac
+  echo "運行中的直播進程："
+  echo "--------------------------------"
+  local i=1
+  for sess in "${SESSIONS[@]}"; do
+    # 去掉前面的 PID，只顯示名稱 (例如 ms_manual_01)
+    local name="${sess#*.}"
+    echo -e " ${C_OK}[$i]${C_RESET} $name"
+    ((i++))
   done
-}
+  echo "--------------------------------"
+  echo " 0. 取消並返回"
+  echo
+  
+  read -rp "請輸入要停止的序號 (1-${#SESSIONS[@]}): " kill_idx
 
-process_list() {
-  draw_header
-  echo -e "${C_MENU}4.1 所有 screen 會話${C_RESET}"
+  # 輸入 0 返回
+  if [[ "$kill_idx" == "0" ]]; then
+    return
+  fi
+
+  # 驗證輸入是否為數字且在範圍內
+  if [[ ! "$kill_idx" =~ ^[0-9]+$ ]] || [ "$kill_idx" -gt "${#SESSIONS[@]}" ] || [ "$kill_idx" -lt 1 ]; then
+    echo -e "${C_ERR}無效序號！${C_RESET}"
+    sleep 1
+    return
+  fi
+
+  # 獲取目標 session
+  local target="${SESSIONS[$((kill_idx-1))]}"
+  local target_name="${target#*.}"
+
   echo
-  screen -ls || echo "目前沒有運行中的 screen 會話。"
-  echo
+  read -rp "確認要停止 [$target_name] 嗎？(y/n): " confirm
+  if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+    screen -S "$target" -X quit
+    echo -e "${C_OK}已成功停止直播進程：$target_name${C_RESET}"
+  else
+    echo "已取消操作。"
+  fi
   pause_return
 }
 
 process_status() {
   draw_header
-  echo -e "${C_MENU}4.2 推流狀態摘要${C_RESET}"
+  echo -e "${C_MENU}4.1 直播狀態概覽${C_RESET}"
   echo
-  local SESSIONS
-  SESSIONS=$(screen -ls 2>/dev/null | grep -E "ms_(auto|manual|vod)_" | awk '{print $1}' || true)
-  if [ -z "$SESSIONS" ]; then
-    echo "目前沒有 Magic Stream 推流。"
-    pause_return
-    return
-  fi
-
-  local i=1
-  while read -r line; do
-    local name
-    name=$(echo "$line" | cut -d. -f1)
-    local log
-    log=$(ls "$LOG_DIR/${name}_"*.log 2>/dev/null | tail -n1)
-    echo "[$i] $name"
-    if [ -f "$log" ]; then
-      echo "    Log: $log"
-      echo "    Last info: $(tail -n 1 "$log")"
-    else
-      echo "    Log: (未找到)"
-    fi
-    echo
-    i=$((i + 1))
-  done <<<"$SESSIONS"
+  # 簡單列出 screen -ls 的結果
+  screen -ls | grep "ms_" || echo "目前沒有運行中的直播。"
+  echo
   pause_return
 }
 
-process_attach() {
-  draw_header
-  echo -e "${C_MENU}4.3 進入 screen (按 Ctrl+A, D 離開)${C_RESET}"
-  echo
-  read -rp "輸入 screen 名稱 (如 ms_auto_01): " SNAME
-  [ -z "$SNAME" ] && return
-  screen -r "$SNAME"
+menu_process() {
+  while true; do
+    draw_header
+    echo -e "${C_MENU}Magic Stream -> 4. 推流進程管理${C_RESET}"
+    echo "1. 查看狀態概覽"
+    echo "2. 停止指定直播 (選擇序號 1, 2, 3...)"
+    echo "0. 返回"
+    read -rp "選擇: " c
+    case "$c" in
+      1) process_status ;;
+      2) process_list_and_kill ;;
+      0) return ;;
+    esac
+  done
 }
 
-process_kill() {
-  draw_header
-  echo -e "${C_MENU}4.4 停止直播${C_RESET}"
-  echo
-  read -rp "輸入要停止的 screen 名稱 (如 ms_auto_01): " SNAME
-  [ -z "$SNAME" ] && return
-  
-  read -rp "確認要停止 $SNAME 嗎？(y/n): " ans
-  if [[ "$ans" == "y" || "$ans" == "Y" ]]; then
-    screen -S "$SNAME" -X quit
-    echo -e "${C_OK}已停止。${C_RESET}"
-  else
-    echo "已取消。"
-  fi
-  pause_return
-}
-
-# ---------------- 5. 更新腳本 ----------------
+# ---------------- 輔助功能 (保持不變) ----------------
 
 menu_update() {
-  draw_header
-  echo -e "${C_MENU}Magic Stream -> 5. 更新腳本${C_RESET}"
-  echo
-  read -rp "確認更新？(y/n): " ans
-  case "$ans" in
-    y|Y)
-      mkdir -p "$INSTALL_DIR"
-      cd "$INSTALL_DIR" || return
-      # 為了避免覆蓋正在執行的腳本報錯，先下載為 tmp 文件
-      curl -fsSL "$RAW_BASE/magic_stream.sh" -o magic_stream.sh.tmp
-      curl -fsSL "$RAW_BASE/magic_autostream.py" -o magic_autostream.py
-      
-      mv magic_stream.sh.tmp magic_stream.sh
-      chmod +x magic_stream.sh magic_autostream.py
-      echo -e "${C_OK}更新完成，正在重啟腳本...${C_RESET}"
-      
-      # 延遲 1 秒後，使用 exec 替換當前進程，實現自動重啟
-      sleep 1
-      exec "$0" "$@"
-      ;;
-    *) echo "已取消。"; pause_return ;;
-  esac
+    draw_header; echo "正在更新..."; 
+    curl -fsSL "https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main/magic_stream.sh" -o magic_stream.sh
+    chmod +x magic_stream.sh
+    echo "更新完成，重啟中..."; sleep 1; exec "$0" "$@"
 }
 
-# ---------------- 6. 功能授權 ----------------
-
-show_license_info() {
-  draw_header
-  echo -e "${C_MENU}Magic Stream -> 6. 功能授權${C_RESET}"
-  echo
-  
-  # 使用 Python 實時計算機器碼，確保與主程序一致
-  local PY_CMD="$PYTHON_BIN"
-  # 如果 venv 裡的 python 不存在，嘗試用系統的
-  if [ ! -x "$PY_CMD" ]; then PY_CMD="python3"; fi
-  
-  # 檢查 python 是否可用
-  if ! command -v "$PY_CMD" >/dev/null 2>&1; then
-    echo -e "${C_ERR}[錯誤] 找不到 Python 環境，無法計算機器碼。請先執行安裝步驟。${C_RESET}"
-    pause_return
-    return
-  fi
-
-  echo "正在讀取本機機器碼..."
-  
-  # 嵌入一段 Python 代碼來計算 ID (邏輯與 magic_autostream.py 完全一致)
-  local MACHINE_ID
-  MACHINE_ID=$($PY_CMD -c "import uuid, hashlib; node = uuid.getnode(); mac = ':'.join(['{:02x}'.format((node >> ele) & 0xff) for ele in range(0,8*6,8)][::-1]); signature = f'magic_stream_{mac}_v1'; print(hashlib.md5(signature.encode()).hexdigest())")
-  
-  echo
-  echo -e "============================================"
-  echo -e " 本機機器碼: ${C_WARN}${MACHINE_ID}${C_RESET}"
-  echo -e "============================================"
-  echo
-  echo "請複製上方黃色機器碼，發送給管理員進行授權。"
-  echo "授權通過後，即可使用「2. 自動轉播」功能。"
-  echo
-  pause_return
-}
-
-# ---------------- 主選單 ----------------
+menu_install() { echo "請使用 install.sh 進行完整安裝。"; pause_return; }
+show_license_info() { echo "功能保留。"; pause_return; }
 
 main_menu() {
   while true; do
     draw_header
     echo -e "${C_MENU}主選單${C_RESET}"
-    echo
-    echo "1. 轉播推流（手動 / 自動）"
-    echo "2. 文件推流"
+    echo "1. 轉播推流 (手動優化版)"
+    echo "2. 文件推流 (定時/定次)"
     echo "3. 直播系統安裝"
     echo "4. 推流進程管理"
     echo "5. 更新腳本"
-    echo "6. 功能授權 (查看機器碼)"
     echo "0. 退出"
     echo
     read -rp "請選擇: " choice
     case "$choice" in
-      1) menu_relay ;;
+      1) relay_manual_rtmp ;;
       2) menu_vod ;;
       3) menu_install ;;
       4) menu_process ;;
       5) menu_update ;;
-      6) show_license_info ;;
       0) exit 0 ;;
-      *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
+      *) ;;
     esac
   done
 }
