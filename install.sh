@@ -2,126 +2,68 @@
 set -e
 
 ########################################
-# GitHub 倉庫配置
+# Magic Stream 一鍵部署腳本 v1.0 (Final)
 ########################################
 RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
-
-# 安裝目錄
 INSTALL_DIR="$HOME/magic_stream"
-
-# 命令名稱
 BIN_CMD_NAME="ms"
 BIN_PATH="/usr/local/bin/$BIN_CMD_NAME"
-########################################
 
-echo "== Magic Stream 安裝器 (v0.7.3) =="
-echo "安裝目錄: $INSTALL_DIR"
-echo "命令名稱: $BIN_CMD_NAME"
-echo
+echo "== Magic Stream 帝國部署系統啟動 =="
+echo "目標目錄: $INSTALL_DIR"
 
-if [ "$(id -u)" -eq 0 ]; then
-  SUDO=""
-else
-  SUDO="sudo"
-fi
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
 
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR/vod" "$INSTALL_DIR/logs" "$INSTALL_DIR/youtube_auth"
-
+# 1. 基礎環境準備
+echo "[1/5] 準備目錄與依賴..."
+mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/vod" "$INSTALL_DIR/logs" "$INSTALL_DIR/youtube_auth"
 cd "$INSTALL_DIR"
 
-# 1. 確保有 curl
-if ! command -v curl >/dev/null 2>&1; then
-  echo "未找到 curl，正在安裝..."
-  if command -v apt >/dev/null 2>&1; then
-    $SUDO apt update || true
-    $SUDO apt install -y curl
-  else
-    echo "系統沒有 apt，請手動安裝 curl 後重試。"
-    exit 1
-  fi
-fi
-
-# 2. 下載腳本
-echo "下載核心腳本..."
-curl -fsSL "$RAW_BASE/magic_stream.sh" -o magic_stream.sh
-curl -fsSL "$RAW_BASE/magic_autostream.py" -o magic_autostream.py
-
-# 🔴 新增：手动下载 PyArmor 运行库文件
-# 注意：必须确保你在 GitHub 上上传了 pyarmor_runtime_000000 文件夹
-RUNTIME_DIR="pyarmor_runtime_000000"
-mkdir -p "$RUNTIME_DIR"
-echo "下載運行庫..."
-curl -fsSL "$RAW_BASE/$RUNTIME_DIR/__init__.py" -o "$RUNTIME_DIR/__init__.py"
-curl -fsSL "$RAW_BASE/$RUNTIME_DIR/pyarmor_runtime.so" -o "$RUNTIME_DIR/pyarmor_runtime.so"
-
-chmod +x magic_stream.sh
-chmod +x magic_autostream.py
-
-# 3. 安裝系統級依賴
-echo
-echo "安裝系統依賴 (ffmpeg, python3, pip, screen)..."
 if command -v apt >/dev/null 2>&1; then
-  $SUDO apt update || true
-  $SUDO apt install -y ffmpeg python3 python3-pip python3-venv screen
+    $SUDO apt update -qq || true
+    $SUDO apt install -y -qq curl ffmpeg python3 python3-pip python3-venv screen git
 else
-  echo "非 Debian/Ubuntu 系統，請確保已安裝 ffmpeg / python3 / pip / screen。"
+    echo "非 Debian/Ubuntu 系統，請確認已安裝 curl/ffmpeg/python3/screen。"
 fi
 
-# 4. 建立 venv 並安裝 Python 依賴
+# 2. 下載核心武器
+echo "[2/5] 下載核心腳本..."
+# 加时间戳防止缓存
+TS=$(date +%s)
+curl -fsSL "$RAW_BASE/magic_stream.sh?t=$TS" -o magic_stream.sh
+curl -fsSL "$RAW_BASE/magic_autostream.py?t=$TS" -o magic_autostream.py
+
+chmod +x magic_stream.sh magic_autostream.py
+
+# 3. 構建 Python 虛擬環境 (核反應堆)
+echo "[3/5] 部署 Python 運行環境..."
 VENV_DIR="$INSTALL_DIR/venv"
-VENV_PIP="$VENV_DIR/bin/pip"
-
-echo
-echo "設定 Python 虛擬環境..."
-
-if command -v python3 >/dev/null 2>&1; then
-  if [ ! -x "$VENV_DIR/bin/python" ]; then
-    python3 -m venv "$VENV_DIR" || echo "建立 venv 失敗。"
-  fi
-
-  if [ -x "$VENV_PIP" ]; then
-    echo "正在安裝 Python 庫 (含 requests)..."
-    "$VENV_PIP" install --upgrade pip
-    # 🔴 关键修改：在这里加入了 requests
-    "$VENV_PIP" install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib requests
-  else
-    echo "未找到 pip，請稍後手動修復。"
-  fi
-else
-  echo "未找到 python3。"
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
 fi
 
-# 5. 生成說明文件
-cat > "$INSTALL_DIR/youtube_auth/README.txt" <<EOF
-【重要說明】
-由於 Google 安全策略限制，無法在 VPS 上直接生成 Token。
+# 4. 強制安裝 Python 依賴庫
+echo "[4/5] 安裝 API 依賴庫..."
+"$VENV_DIR/bin/pip" install --upgrade pip -q
+"$VENV_DIR/bin/pip" install --upgrade google-api-python-client google-auth-oauthlib google-auth-httplib2 requests -q
 
-請按照以下步驟操作：
-1. 在你的「本地電腦」(Windows/Mac) 上運行一次腳本進行授權。
-2. 生成 client_secret.json 和 token.json。
-3. 將這兩個文件上傳到本目錄：
-   $INSTALL_DIR/youtube_auth
-EOF
-
-# 6. 建立快捷指令
-echo
-echo "建立快捷命令：$BIN_CMD_NAME"
-if command -v "$BIN_CMD_NAME" >/dev/null 2>&1; then
-  echo "注意：覆蓋已存在的命令。"
-fi
-
+# 5. 建立快捷指令
+echo "[5/5] 註冊全局命令 'ms'..."
 $SUDO tee "$BIN_PATH" >/dev/null <<EOF
 #!/bin/bash
 cd "$INSTALL_DIR"
 exec "$INSTALL_DIR/magic_stream.sh" "\$@"
 EOF
-
 $SUDO chmod +x "$BIN_PATH"
+
+# 6. 生成說明書
+cat > "$INSTALL_DIR/youtube_auth/README.txt" <<EOF
+請將 client_secret.json 和 token.json 上傳至此目錄以啟用自動 API 功能。
+EOF
 
 echo
 echo "========================================"
-echo -e "\033[32m Magic Stream 安裝完成！ \033[0m"
+echo -e "\033[32m 部署完成！帝國節點已就緒。 \033[0m"
 echo "========================================"
-echo " 輸入 '$BIN_CMD_NAME' 即可啟動菜單。"
+echo " 請直接輸入 'ms' 啟動控制台。"
 echo "========================================"
