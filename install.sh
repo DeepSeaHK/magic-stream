@@ -1,9 +1,8 @@
-cat > install.sh << 'EOF'
 #!/bin/bash
 set -e
 
 ########################################
-# Magic Stream 商業部署腳本 v1.2 (Commercial)
+# Magic Stream 商業部署腳本 v1.3 (Universal)
 ########################################
 RAW_BASE="https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main"
 INSTALL_DIR="$HOME/magic_stream"
@@ -26,21 +25,18 @@ else
     echo "非 Debian/Ubuntu 系統，請手動安裝 curl/ffmpeg/python3/screen。"
 fi
 
-# 2. 下載核心組件 (帶時間戳防緩存)
-TS=$(date +%s)
+# 2. 下載核心組件 (去除 ?t= 參數以增加兼容性，依靠強制覆蓋)
 echo "正在下載核心組件..."
-curl -fsSL "$RAW_BASE/magic_stream.sh?t=$TS" -o magic_stream.sh
-curl -fsSL "$RAW_BASE/magic_autostream.py?t=$TS" -o magic_autostream.py
+curl -fsSL "$RAW_BASE/magic_stream.sh" -o magic_stream.sh
+curl -fsSL "$RAW_BASE/magic_autostream.py" -o magic_autostream.py
 
-# === 🔴 商業版關鍵：下載加密運行庫 ===
+# === 下載加密運行庫 ===
 RUNTIME_DIR="pyarmor_runtime_000000"
 mkdir -p "$RUNTIME_DIR"
 echo "正在下載運行環境庫..."
-# 下載 __init__.py
-curl -fsSL "$RAW_BASE/$RUNTIME_DIR/__init__.py?t=$TS" -o "$RUNTIME_DIR/__init__.py"
-# 下載核心 .so 文件 (Linux 專用)
-curl -fsSL "$RAW_BASE/$RUNTIME_DIR/pyarmor_runtime.so?t=$TS" -o "$RUNTIME_DIR/pyarmor_runtime.so"
-# ======================================
+curl -fsSL "$RAW_BASE/$RUNTIME_DIR/__init__.py" -o "$RUNTIME_DIR/__init__.py"
+curl -fsSL "$RAW_BASE/$RUNTIME_DIR/pyarmor_runtime.so" -o "$RUNTIME_DIR/pyarmor_runtime.so"
+# ======================
 
 chmod +x magic_stream.sh magic_autostream.py
 
@@ -53,18 +49,15 @@ if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
 "$VENV_DIR/bin/pip" install --upgrade pip -q
 "$VENV_DIR/bin/pip" install --upgrade google-api-python-client google-auth-oauthlib google-auth-httplib2 requests -q
 
-# 5. 快捷指令
-$SUDO tee "$BIN_PATH" >/dev/null <<EOF
-#!/bin/bash
-cd "$INSTALL_DIR"
-exec "$INSTALL_DIR/magic_stream.sh" "\$@"
-EOF
+# 5. 快捷指令 (使用 echo 替代 heredoc 防止格式錯誤)
+echo "註冊全局命令 'ms'..."
+echo "#!/bin/bash" | $SUDO tee "$BIN_PATH" >/dev/null
+echo "cd \"$INSTALL_DIR\"" | $SUDO tee -a "$BIN_PATH" >/dev/null
+echo "exec \"$INSTALL_DIR/magic_stream.sh\" \"\$@\"" | $SUDO tee -a "$BIN_PATH" >/dev/null
 $SUDO chmod +x "$BIN_PATH"
 
-# 6. 說明文件
-cat > "$INSTALL_DIR/youtube_auth/README.txt" <<EOF
-請將 client_secret.json 和 token.json 上傳至此目錄以啟用自動 API 功能。
-EOF
+# 6. 說明文件 (使用 echo 替代 heredoc)
+echo "請將 client_secret.json 和 token.json 上傳至此目錄以啟用自動 API 功能。" > "$INSTALL_DIR/youtube_auth/README.txt"
 
 echo
 echo "========================================"
@@ -74,7 +67,3 @@ echo " 1. 輸入 'ms' 啟動菜單"
 echo " 2. 選擇 '5. 功能授權' 獲取機器碼"
 echo " 3. 聯繫管理員開通白名單"
 echo "========================================"
-EOF
-
-# 立即运行本地生成的脚本
-bash install.sh
