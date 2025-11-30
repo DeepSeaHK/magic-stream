@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-# Magic Stream 直播推流腳本  v0.8.3 (License UI)
+# Magic Stream 直播推流腳本  v0.8.4 (Process View)
 # ============================================
 
 INSTALL_DIR="$HOME/magic_stream"
@@ -35,7 +35,7 @@ draw_header() {
   echo " | |  | |/ ___ \ |_| || | |___ "
   echo " |_|  |_/_/   \_\____|___\____|"
   echo "------------------------------------------------------------"
-  echo "            Magic Stream 直播推流腳本  v0.8.3"
+  echo "            Magic Stream 直播推流腳本  v0.8.4"
   echo -e "============================================================${C_RESET}"
   echo
 }
@@ -54,12 +54,6 @@ ensure_env() {
     echo -e "${C_ERR}[致命錯誤] 系統缺失 ffmpeg！${C_RESET}"
     echo "請重新運行 install.sh 進行修復。"
     pause_return; main_menu
-  fi
-}
-
-ensure_python_venv() {
-  if [ ! -x "$INSTALL_DIR/venv/bin/python" ]; then
-    echo -e "${C_WARN}[提示] 正在初始化環境...${C_RESET}"
   fi
 }
 
@@ -220,19 +214,21 @@ menu_vod() {
   echo -e "${C_OK}推流已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
 }
 
-# ------------- 3. 進程管理 -------------
+# ------------- 3. 進程管理 (核心升級：找回了查看功能) -------------
 
 menu_process() {
   while true; do
     draw_header
     echo -e "${C_MENU}Magic Stream -> 3. 進程管理${C_RESET}"
-    echo "1. 查看狀態"
+    echo "1. 查看狀態 (僅列出)"
     echo "2. 停止指定直播"
+    echo "3. 進入直播間 (查看實時日誌)"
     echo "0. 返回"
     read -rp "選擇: " c
     case "$c" in
       1) screen -ls | grep "ms_" || echo "無運行中進程"; pause_return ;;
       2) process_kill ;;
+      3) process_view ;;
       0) return ;;
     esac
   done
@@ -257,6 +253,27 @@ process_kill() {
   echo -e "${C_OK}已停止: ${target#*.}${C_RESET}"; pause_return
 }
 
+process_view() {
+  draw_header; echo -e "${C_MENU}進入直播間 (查看實時日誌)${C_RESET}"; echo
+  echo -e "${C_DIM}提示：按 Ctrl+A 然後按 D 退出查看（不要按 Ctrl+C，否則會停止直播）${C_RESET}"; echo
+  
+  mapfile -t SESSIONS < <(screen -ls | grep -oE "[0-9]+\.ms_(manual|vod|smart|auto)_[0-9]+" | sort)
+  if [ ${#SESSIONS[@]} -eq 0 ]; then echo "無進程。"; pause_return; return; fi
+
+  local i=1
+  for sess in "${SESSIONS[@]}"; do
+    echo -e " ${C_OK}[$i]${C_RESET} ${sess#*.}"
+    ((i++))
+  done
+  echo; read -rp "輸入序號 (0返回): " k
+  if [[ "$k" == "0" ]]; then return; fi
+  if [[ ! "$k" =~ ^[0-9]+$ ]] || [ "$k" -gt "${#SESSIONS[@]}" ]; then echo "無效序號"; sleep 1; return; fi
+  
+  local target="${SESSIONS[$((k-1))]}"
+  # 進入 screen
+  screen -r "$target"
+}
+
 # ------------- 4. 系統維護 -------------
 
 menu_update() {
@@ -266,37 +283,13 @@ menu_update() {
     echo "更新完成，重啟中..."; sleep 1; exec "$0" "$@"
 }
 
-# 5. 功能授權 (全新升級版)
 show_license_info() {
   ensure_python_venv
   draw_header
   echo -e "${C_MENU}Magic Stream -> 5. 功能授權${C_RESET}"
-  echo "正在連接授權服務器 (GitHub Gist)..."
-  
+  echo "正在讀取本機機器碼..."
   cd "$INSTALL_DIR" || return
-  
-  # 1. 獲取 Python 輸出 (機器碼)
-  # 2. 獲取 Python 退出狀態碼 (0=已授權, 1=未授權)
-  MACHINE_ID=$("$PYTHON_BIN" magic_autostream.py --check-license)
-  RET_CODE=$?
-  
-  echo
-  echo "============================================"
-  echo -e " 本機機器碼: ${C_WARN}${MACHINE_ID}${C_RESET}"
-  
-  if [ $RET_CODE -eq 0 ]; then
-      echo -e " 授權狀態  : ${C_OK}✅ 已授權 (Active)${C_RESET}"
-      echo "============================================"
-      echo
-      echo -e "${C_OK}恭喜！您的設備已在白名單中。${C_RESET}"
-      echo "您可以正常使用所有功能。"
-  else
-      echo -e " 授權狀態  : ${C_ERR}❌ 未授權 (Inactive)${C_RESET}"
-      echo "============================================"
-      echo
-      echo -e "${C_ERR}[警告] 腳本未激活，無法使用自動轉播功能。${C_RESET}"
-      echo "請複製上方黃色機器碼，發送給管理員開通權限。"
-  fi
+  "$PYTHON_BIN" magic_autostream.py --check-license
   echo
   pause_return
 }
@@ -309,7 +302,7 @@ main_menu() {
     echo "2. 文件推流"
     echo "3. 進程管理"
     echo "4. 更新腳本"
-    echo "5. 功能授權 (狀態檢測)"
+    echo "5. 功能授權"
     echo "0. 退出"
     echo
     read -rp "請選擇: " choice
