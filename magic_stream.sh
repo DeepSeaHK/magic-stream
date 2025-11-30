@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-# Magic Stream 直播推流腳本  v0.8.0 (Commander)
+# Magic Stream 直播推流腳本  v0.8.3 (License UI)
 # ============================================
 
 INSTALL_DIR="$HOME/magic_stream"
@@ -35,7 +35,7 @@ draw_header() {
   echo " | |  | |/ ___ \ |_| || | |___ "
   echo " |_|  |_/_/   \_\____|___\____|"
   echo "------------------------------------------------------------"
-  echo "            Magic Stream 直播推流腳本  v0.8.0"
+  echo "            Magic Stream 直播推流腳本  v0.8.3"
   echo -e "============================================================${C_RESET}"
   echo
 }
@@ -50,11 +50,25 @@ confirm_action() {
 }
 
 ensure_env() {
-  # 自動環境檢查：不再顯示安裝菜單，而是報錯提示
   if ! command -v ffmpeg >/dev/null 2>&1; then
     echo -e "${C_ERR}[致命錯誤] 系統缺失 ffmpeg！${C_RESET}"
     echo "請重新運行 install.sh 進行修復。"
     pause_return; main_menu
+  fi
+}
+
+ensure_python_venv() {
+  if [ ! -x "$INSTALL_DIR/venv/bin/python" ]; then
+    echo -e "${C_WARN}[提示] 正在初始化環境...${C_RESET}"
+  fi
+}
+
+ensure_python_auth() {
+  if [ ! -f "$AUTH_DIR/token.json" ]; then
+    echo -e "${C_ERR}[錯誤] 未找到 API 憑證 (token.json)！${C_RESET}"
+    echo "自動模式需要 YouTube API 授權。"
+    echo "請將憑證上傳至: $AUTH_DIR"
+    pause_return; return 1
   fi
 }
 
@@ -66,18 +80,20 @@ next_screen_name() {
   printf "%s_%02d" "$prefix" "$max_id"
 }
 
-# ------------- 1. 轉播推流 (Stream Copy 核心) -------------
+# ------------- 1. 轉播推流 -------------
 
 menu_relay() {
   while true; do
     draw_header
     echo -e "${C_MENU}Magic Stream -> 1. 轉播推流${C_RESET}"
     echo "1. 手動 RTMP 轉播 (輸入連結 -> 直接推流)"
+    echo "2. 自動轉播 (API 監控模式 - 斷流自動重建)"
     echo "0. 返回主選單"
     echo
     read -rp "請選擇: " choice
     case "$choice" in
       1) relay_manual_rtmp ;;
+      2) relay_auto_youtube ;;
       0) return ;;
       *) echo -e "${C_WARN}無效選項。${C_RESET}"; sleep 1 ;;
     esac
@@ -106,7 +122,6 @@ relay_manual_rtmp() {
   SCREEN_NAME=$(next_screen_name "ms_manual")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
 
-  # 終極優化命令
   local CMD
   CMD="while true; do \
     echo \"[\$(date)] 啟動推流...\"; \
@@ -122,6 +137,48 @@ relay_manual_rtmp() {
 
   screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
   echo -e "${C_OK}推流已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
+}
+
+relay_auto_youtube() {
+  ensure_env
+  ensure_python_auth || return
+
+  draw_header
+  echo -e "${C_MENU}Magic Stream -> 1.2 自動轉播 (API 監控)${C_RESET}"
+  echo
+  read -rp "請輸入直播源 URL (探針目標): " SOURCE_URL
+  [ -z "$SOURCE_URL" ] && return
+
+  read -rp "請輸入 YouTube 直播標題: " TITLE
+  [ -z "$TITLE" ] && TITLE="Magic Stream Live"
+
+  echo; echo "隱私狀態: 1.公開  2.不公開(預設)  3.私享"
+  read -rp "選擇: " p
+  case "$p" in 1) PRIV="public";; 3) PRIV="private";; *) PRIV="unlisted";; esac
+
+  echo; read -rp "斷流容忍時間 (秒，預設300): " TO
+  TIMEOUT="${TO:-300}"
+
+  draw_header
+  echo -e "${C_MENU}--- 任務摘要 (自動值守) ---${C_RESET}"
+  echo -e "監控源   : ${C_INPUT}$SOURCE_URL${C_RESET}"
+  echo -e "標題     : ${C_INPUT}$TITLE${C_RESET}"
+  echo -e "核心狀態 : ${C_OK}已啟用加密內核 (v0.7.5 Ultra)${C_RESET}"
+  
+  confirm_action || { echo "已取消。"; pause_return; return; }
+
+  local SCREEN_NAME=$(next_screen_name "ms_auto")
+  local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
+
+  local CMD="cd \"$INSTALL_DIR\" && \"$PYTHON_BIN\" -u \"$INSTALL_DIR/magic_autostream.py\" \
+    --source-url \"$SOURCE_URL\" \
+    --title \"$TITLE\" \
+    --privacy \"$PRIV\" \
+    --reconnect-seconds \"$TIMEOUT\" \
+    --auth-dir \"$AUTH_DIR\""
+
+  screen -S "$SCREEN_NAME" -dm bash -c "$CMD 2>&1 | tee \"$LOG_FILE\""
+  echo -e "${C_OK}自動值守進程已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
 }
 
 # ------------- 2. 文件推流 -------------
@@ -205,9 +262,43 @@ process_kill() {
 menu_update() {
     draw_header; echo "正在從 GitHub 拉取最新版..."; 
     curl -fsSL "https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main/magic_stream.sh?t=$(date +%s)" -o magic_stream.sh
-    curl -fsSL "https://raw.githubusercontent.com/DeepSeaHK/magic-stream/main/magic_autostream.py?t=$(date +%s)" -o magic_autostream.py
-    chmod +x magic_stream.sh magic_autostream.py
+    chmod +x magic_stream.sh
     echo "更新完成，重啟中..."; sleep 1; exec "$0" "$@"
+}
+
+# 5. 功能授權 (全新升級版)
+show_license_info() {
+  ensure_python_venv
+  draw_header
+  echo -e "${C_MENU}Magic Stream -> 5. 功能授權${C_RESET}"
+  echo "正在連接授權服務器 (GitHub Gist)..."
+  
+  cd "$INSTALL_DIR" || return
+  
+  # 1. 獲取 Python 輸出 (機器碼)
+  # 2. 獲取 Python 退出狀態碼 (0=已授權, 1=未授權)
+  MACHINE_ID=$("$PYTHON_BIN" magic_autostream.py --check-license)
+  RET_CODE=$?
+  
+  echo
+  echo "============================================"
+  echo -e " 本機機器碼: ${C_WARN}${MACHINE_ID}${C_RESET}"
+  
+  if [ $RET_CODE -eq 0 ]; then
+      echo -e " 授權狀態  : ${C_OK}✅ 已授權 (Active)${C_RESET}"
+      echo "============================================"
+      echo
+      echo -e "${C_OK}恭喜！您的設備已在白名單中。${C_RESET}"
+      echo "您可以正常使用所有功能。"
+  else
+      echo -e " 授權狀態  : ${C_ERR}❌ 未授權 (Inactive)${C_RESET}"
+      echo "============================================"
+      echo
+      echo -e "${C_ERR}[警告] 腳本未激活，無法使用自動轉播功能。${C_RESET}"
+      echo "請複製上方黃色機器碼，發送給管理員開通權限。"
+  fi
+  echo
+  pause_return
 }
 
 main_menu() {
@@ -218,6 +309,7 @@ main_menu() {
     echo "2. 文件推流"
     echo "3. 進程管理"
     echo "4. 更新腳本"
+    echo "5. 功能授權 (狀態檢測)"
     echo "0. 退出"
     echo
     read -rp "請選擇: " choice
@@ -226,6 +318,7 @@ main_menu() {
       2) menu_vod ;;
       3) menu_process ;;
       4) menu_update ;;
+      5) show_license_info ;;
       0) exit 0 ;;
       *) ;;
     esac
