@@ -287,9 +287,32 @@ show_license_info() {
   ensure_python_venv
   draw_header
   echo -e "${C_MENU}Magic Stream -> 5. 功能授權${C_RESET}"
-  echo "正在讀取本機機器碼..."
+  echo "正在連接授權服務器 (GitHub Gist)..."
+  
   cd "$INSTALL_DIR" || return
-  "$PYTHON_BIN" magic_autostream.py --check-license
+  
+  # 1. 獲取 Python 輸出 (機器碼)
+  # 2. 獲取 Python 退出狀態碼 (0=已授權, 1=未授權)
+  MACHINE_ID=$("$PYTHON_BIN" magic_autostream.py --check-license)
+  RET_CODE=$?
+  
+  echo
+  echo "============================================"
+  echo -e " 本機機器碼: ${C_WARN}${MACHINE_ID}${C_RESET}"
+  
+  if [ $RET_CODE -eq 0 ]; then
+      echo -e " 授權狀態  : ${C_OK}✅ 已授權 (Active)${C_RESET}"
+      echo "============================================"
+      echo
+      echo -e "${C_OK}恭喜！您的設備已在白名單中。${C_RESET}"
+      echo "您可以正常使用所有功能。"
+  else
+      echo -e " 授權狀態  : ${C_ERR}❌ 未授權 (Inactive)${C_RESET}"
+      echo "============================================"
+      echo
+      echo -e "${C_ERR}[警告] 腳本未激活，無法使用自動轉播功能。${C_RESET}"
+      echo "請複製上方黃色機器碼，發送給管理員開通權限。"
+  fi
   echo
   pause_return
 }
