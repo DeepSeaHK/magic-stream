@@ -180,53 +180,82 @@ relay_auto_youtube() {
 menu_vod() {
   ensure_env
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (稳定版)${C_RESET}"
-  echo "视频目录：$VOD_DIR"
-  read -rp "请输入文件名: " FILE_NAME
+  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (逻辑修正版)${C_RESET}"
+  echo "視頻目錄：$VOD_DIR"
+  
+  # 列出目录下的文件方便选择
+  ls -lh "$VOD_DIR"
+  echo
+  
+  read -rp "請輸入文件名 (需在 vod 目錄下): " FILE_NAME
   [ -z "$FILE_NAME" ] && return
   local FULL_PATH="$VOD_DIR/$FILE_NAME"
-  if [ ! -f "$FULL_PATH" ]; then echo -e "${C_ERR}文件不存在${C_RESET}"; pause_return; return; fi
   
-  # === 自动容错修复开始 ===
-  read -rp "请输入串流金钥 (直接粘贴即可): " TMP_KEY
-  [ -z "$TMP_KEY" ] && return
-  # 自动清洗：如果用户不小心复制了完整链接，这里自动把前缀删掉，只保留 Key
-  # 移除 rtmp 前缀
-  STREAM_KEY=${TMP_KEY#*live2/}
-  # 移除可能的斜杠
-  STREAM_KEY=${STREAM_KEY//\//}
-  # === 自动容错修复结束 ===
+  if [ ! -f "$FULL_PATH" ]; then 
+      echo -e "${C_ERR}錯誤：文件不存在！${C_RESET}"
+      echo "請確認文件已上傳至: $VOD_DIR"
+      pause_return; return
+  fi
+  
+  read -rp "請輸入直播串流金鑰 (Stream Key): " STREAM_KEY
+  [ -z "$STREAM_KEY" ] && return
 
-  echo; echo "推流模式： 1.无限循环  2.定时停止  3.定次播放"
-  read -rp "请选择 (1-3): " mode_choice
-  local FFMPEG_OPTS="-stream_loop -1"
-  local MODE_DESC="无限循环"
+  echo; echo "推流模式： 1.無限循環(推薦)  2.定時停止  3.定次播放"
+  read -rp "請選擇 (1-3): " mode_choice
+  
+  # 基础参数：读取速度控制 + 时间戳修复
+  local FFMPEG_PRE_FLAGS="-re -fflags +genpts"
+  local LOOP_OPTS="-stream_loop -1"
+  local MODE_DESC="無限循環"
 
   case "$mode_choice" in
-    2) read -rp "时长(分钟): " m; FFMPEG_OPTS="-stream_loop -1 -t $((m*60))"; MODE_DESC="定时 $m 分鐘" ;;
-    3) read -rp "重复次数 (输入0为播完即停): " c; FFMPEG_OPTS="-stream_loop $c"; MODE_DESC="定次 $c 回" ;;
+    2) 
+        read -rp "時長(分鐘): " m
+        # 计算秒数
+        LOOP_OPTS="-stream_loop -1 -t $((m*60))"
+        MODE_DESC="定時 $m 分鐘" 
+        ;;
+    3) 
+        read -rp "播放次數 (例如输入1即只播一次): " c
+        # 【逻辑修正核心】：FFmpeg的loop是指“重复次数”，所以需要减1
+        # 输入 1 -> loop 0 (不重复) -> 总共播 1 次
+        # 输入 3 -> loop 2 (重复2次) -> 总共播 3 次
+        if [ "$c" -gt 0 ]; then
+            local loop_count=$((c - 1))
+        else
+            local loop_count=0
+        fi
+        LOOP_OPTS="-stream_loop $loop_count"
+        MODE_DESC="定次播放 $c 遍" 
+        ;;
   esac
 
   draw_header
-  echo -e "${C_MENU}--- 任务摘要 ---${C_RESET}"
-  echo -e "文件: ${C_INPUT}$FILE_NAME${C_RESET}"
-  echo -e "模式: ${C_OK}$MODE_DESC${C_RESET}"
-  echo -e "策略: ${C_OK}30fps / Ultrafast (CPU 占用已优化)${C_RESET}"
+  echo -e "${C_MENU}--- 任務摘要 ---${C_RESET}"
+  echo -e "文件     : ${C_INPUT}$FILE_NAME${C_RESET}"
+  echo -e "模式     : ${C_OK}$MODE_DESC${C_RESET}"
+  echo -e "技術優化 : ${C_OK}流複製 + H.264 Annex-B 濾鏡${C_RESET}"
   confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME=$(next_screen_name "ms_vod")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
   
-  # === 核心命令 (单行模式，杜绝语法错误) ===
-  # 1. -r 30: 强制 30帧 (解决 CPU 90% 占用问题)
-  # 2. ultrafast: 极速编码预设 (解决卡顿)
-  # 3. 4500k: 降低带宽压力 (解决黄色网络警告)
-  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" -c:v libx264 -preset ultrafast -r 30 -g 60 -keyint_min 60 -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
+  # 核心推流命令 (保持之前的防卡顿优化)
+  local CMD="ffmpeg $FFMPEG_PRE_FLAGS $LOOP_OPTS -i \"$FULL_PATH\" \
+    -c:v copy -c:a copy \
+    -bsf:v h264_mp4toannexb \
+    -max_muxing_queue_size 2048 \
+    -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
+    
+  # 自动重启机制
+  local FULL_CMD="while true; do echo '正在启动推流...'; $CMD; echo '推流结束或意外中断，3秒后重试...'; sleep 3; break; done"
 
-  local FULL_CMD="$CMD; echo '任务完成，60秒后关闭...'; sleep 60"
+  # 注意：上面的 break 保证了定次播放结束后脚本会退出循环，不会无限重启
 
   screen -S "$SCREEN_NAME" -dm bash -c "$FULL_CMD 2>&1 | tee \"$LOG_FILE\""
-  echo -e "${C_OK}推流已启动 [$SCREEN_NAME]。${C_RESET}"; pause_return
+  
+  echo -e "${C_OK}推流已啟動 [$SCREEN_NAME]。${C_RESET}"
+  pause_return
 }
 
 
