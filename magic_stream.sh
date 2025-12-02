@@ -177,20 +177,22 @@ relay_auto_youtube() {
 
 # ------------- 2. 文件推流 -------------
 
+# ------------- 2. 文件推流 (轻量级流畅版) -------------
+
 menu_vod() {
   ensure_env
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (穩定版)${C_RESET}"
-  echo "視頻目錄：$VOD_DIR"
-  read -rp "請輸入文件名: " FILE_NAME
+  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (Lite Mode)${C_RESET}"
+  echo "视频目录：$VOD_DIR"
+  read -rp "请輸入文件名: " FILE_NAME
   [ -z "$FILE_NAME" ] && return
   local FULL_PATH="$VOD_DIR/$FILE_NAME"
   if [ ! -f "$FULL_PATH" ]; then echo -e "${C_ERR}文件不存在${C_RESET}"; pause_return; return; fi
-  read -rp "請輸入串流金鑰: " STREAM_KEY
+  read -rp "请輸入串流金鑰: " STREAM_KEY
   [ -z "$STREAM_KEY" ] && return
 
   echo; echo "推流模式： 1.無限循環  2.定時停止  3.定次播放"
-  read -rp "請選擇 (1-3): " mode_choice
+  read -rp "请选择 (1-3): " mode_choice
   local FFMPEG_OPTS="-stream_loop -1"
   local MODE_DESC="無限循環"
 
@@ -203,20 +205,20 @@ menu_vod() {
   echo -e "${C_MENU}--- 任務摘要 ---${C_RESET}"
   echo -e "文件: ${C_INPUT}$FILE_NAME${C_RESET}"
   echo -e "模式: ${C_OK}$MODE_DESC${C_RESET}"
-  echo -e "內核: ${C_OK}強制修復模式 (Auto-Fix VBR)${C_RESET}"
+  echo -e "優化: ${C_OK}30fps / Ultrafast (防卡頓)${C_RESET}"
   confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME=$(next_screen_name "ms_vod")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
   
-  # === 核心修改部分開始 ===
-  # 原來的命令是 -c copy，現在改為強制編碼以修復關鍵幀和碼率問題
+  # === 核心优化：降帧 + 极速预设 ===
   local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" \
-    -c:v libx264 -preset veryfast -b:v 6000k -maxrate 6000k -bufsize 12000k \
-    -pix_fmt yuv420p -g 60 -keyint_min 60 \
+    -c:v libx264 -preset ultrafast -r 30 -g 60 -keyint_min 60 \
+    -b:v 4500k -maxrate 4500k -bufsize 9000k \
+    -pix_fmt yuv420p \
     -c:a aac -b:a 128k -ar 44100 \
     -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
-  # === 核心修改部分結束 ===
+  # =================================
 
   local FULL_CMD="$CMD; echo '任務完成，60秒後關閉...'; sleep 60"
 
