@@ -175,7 +175,7 @@ relay_auto_youtube() {
   echo -e "${C_OK}自動值守進程已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
 }
 
-# ------------- 2. 文件推流 -------------
+# ---------------- 2. 文件推流 ----------------
 
 menu_vod() {
   ensure_ffmpeg
@@ -223,21 +223,7 @@ menu_vod() {
   echo -e "${C_OK}文件推流已啟動 [$SCREEN_NAME]。${C_RESET}"
   pause_return
 }
-  
-  # === 核心优化：降帧 + 极速预设 ===
-  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" \
-    -c:v libx264 -preset ultrafast -r 30 -g 60 -keyint_min 60 \
-    -b:v 4500k -maxrate 4500k -bufsize 9000k \
-    -pix_fmt yuv420p \
-    -c:a aac -b:a 128k -ar 44100 \
-    -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
-  # =================================
 
-  local FULL_CMD="$CMD; echo '任務完成，60秒後關閉...'; sleep 60"
-
-  screen -S "$SCREEN_NAME" -dm bash -c "$FULL_CMD 2>&1 | tee \"$LOG_FILE\""
-  echo -e "${C_OK}推流已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
-}
 
 # ------------- 3. 進程管理 (核心升級：找回了查看功能) -------------
 
