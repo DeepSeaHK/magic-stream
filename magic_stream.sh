@@ -180,7 +180,7 @@ relay_auto_youtube() {
 menu_vod() {
   ensure_env
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 2. 文件推流${C_RESET}"
+  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (穩定版)${C_RESET}"
   echo "視頻目錄：$VOD_DIR"
   read -rp "請輸入文件名: " FILE_NAME
   [ -z "$FILE_NAME" ] && return
@@ -203,11 +203,21 @@ menu_vod() {
   echo -e "${C_MENU}--- 任務摘要 ---${C_RESET}"
   echo -e "文件: ${C_INPUT}$FILE_NAME${C_RESET}"
   echo -e "模式: ${C_OK}$MODE_DESC${C_RESET}"
+  echo -e "內核: ${C_OK}強制修復模式 (Auto-Fix VBR)${C_RESET}"
   confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME=$(next_screen_name "ms_vod")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
-  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" -c copy -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
+  
+  # === 核心修改部分開始 ===
+  # 原來的命令是 -c copy，現在改為強制編碼以修復關鍵幀和碼率問題
+  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" \
+    -c:v libx264 -preset veryfast -b:v 6000k -maxrate 6000k -bufsize 12000k \
+    -pix_fmt yuv420p -g 60 -keyint_min 60 \
+    -c:a aac -b:a 128k -ar 44100 \
+    -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
+  # === 核心修改部分結束 ===
+
   local FULL_CMD="$CMD; echo '任務完成，60秒後關閉...'; sleep 60"
 
   screen -S "$SCREEN_NAME" -dm bash -c "$FULL_CMD 2>&1 | tee \"$LOG_FILE\""
