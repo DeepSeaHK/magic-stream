@@ -177,53 +177,56 @@ relay_auto_youtube() {
 
 # ---------------- 2. 文件推流 ----------------
 
-# ------------- 2. 文件推流 (已修復：強制轉碼模式) -------------
-
 menu_vod() {
   ensure_env
   draw_header
-  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (穩定版)${C_RESET}"
-  echo "視頻目錄：$VOD_DIR"
-  read -rp "請輸入文件名: " FILE_NAME
+  echo -e "${C_MENU}Magic Stream -> 2. 文件推流 (稳定版)${C_RESET}"
+  echo "视频目录：$VOD_DIR"
+  read -rp "请输入文件名: " FILE_NAME
   [ -z "$FILE_NAME" ] && return
   local FULL_PATH="$VOD_DIR/$FILE_NAME"
   if [ ! -f "$FULL_PATH" ]; then echo -e "${C_ERR}文件不存在${C_RESET}"; pause_return; return; fi
-  read -rp "請輸入串流金鑰: " STREAM_KEY
-  [ -z "$STREAM_KEY" ] && return
+  
+  # === 自动容错修复开始 ===
+  read -rp "请输入串流金钥 (直接粘贴即可): " TMP_KEY
+  [ -z "$TMP_KEY" ] && return
+  # 自动清洗：如果用户不小心复制了完整链接，这里自动把前缀删掉，只保留 Key
+  # 移除 rtmp 前缀
+  STREAM_KEY=${TMP_KEY#*live2/}
+  # 移除可能的斜杠
+  STREAM_KEY=${STREAM_KEY//\//}
+  # === 自动容错修复结束 ===
 
-  echo; echo "推流模式： 1.無限循環  2.定時停止  3.定次播放"
-  read -rp "請選擇 (1-3): " mode_choice
+  echo; echo "推流模式： 1.无限循环  2.定时停止  3.定次播放"
+  read -rp "请选择 (1-3): " mode_choice
   local FFMPEG_OPTS="-stream_loop -1"
-  local MODE_DESC="無限循環"
+  local MODE_DESC="无限循环"
 
   case "$mode_choice" in
-    2) read -rp "時長(分鐘): " m; FFMPEG_OPTS="-stream_loop -1 -t $((m*60))"; MODE_DESC="定時 $m 分鐘" ;;
-    3) read -rp "重複次數: " c; FFMPEG_OPTS="-stream_loop $c"; MODE_DESC="定次 $c 回" ;;
+    2) read -rp "时长(分钟): " m; FFMPEG_OPTS="-stream_loop -1 -t $((m*60))"; MODE_DESC="定时 $m 分鐘" ;;
+    3) read -rp "重复次数 (输入0为播完即停): " c; FFMPEG_OPTS="-stream_loop $c"; MODE_DESC="定次 $c 回" ;;
   esac
 
   draw_header
-  echo -e "${C_MENU}--- 任務摘要 ---${C_RESET}"
+  echo -e "${C_MENU}--- 任务摘要 ---${C_RESET}"
   echo -e "文件: ${C_INPUT}$FILE_NAME${C_RESET}"
   echo -e "模式: ${C_OK}$MODE_DESC${C_RESET}"
-  echo -e "內核: ${C_OK}強制修復模式 (Auto-Fix VBR)${C_RESET}"
+  echo -e "策略: ${C_OK}30fps / Ultrafast (CPU 占用已优化)${C_RESET}"
   confirm_action || { echo "已取消。"; pause_return; return; }
 
   local SCREEN_NAME=$(next_screen_name "ms_vod")
   local LOG_FILE="$LOG_DIR/${SCREEN_NAME}_$(date +%m%d_%H%M%S).log"
   
-  # === 核心修改部分開始 ===
-  # 原來的命令是 -c copy，現在改為強制編碼以修復關鍵幀和碼率問題
-  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" \
-    -c:v libx264 -preset veryfast -b:v 6000k -maxrate 6000k -bufsize 12000k \
-    -pix_fmt yuv420p -g 60 -keyint_min 60 \
-    -c:a aac -b:a 128k -ar 44100 \
-    -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
-  # === 核心修改部分結束 ===
+  # === 核心命令 (单行模式，杜绝语法错误) ===
+  # 1. -r 30: 强制 30帧 (解决 CPU 90% 占用问题)
+  # 2. ultrafast: 极速编码预设 (解决卡顿)
+  # 3. 4500k: 降低带宽压力 (解决黄色网络警告)
+  local CMD="ffmpeg -re $FFMPEG_OPTS -i \"$FULL_PATH\" -c:v libx264 -preset ultrafast -r 30 -g 60 -keyint_min 60 -b:v 4500k -maxrate 4500k -bufsize 9000k -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -f flv \"rtmp://a.rtmp.youtube.com/live2/$STREAM_KEY\""
 
-  local FULL_CMD="$CMD; echo '任務完成，60秒後關閉...'; sleep 60"
+  local FULL_CMD="$CMD; echo '任务完成，60秒后关闭...'; sleep 60"
 
   screen -S "$SCREEN_NAME" -dm bash -c "$FULL_CMD 2>&1 | tee \"$LOG_FILE\""
-  echo -e "${C_OK}推流已啟動 [$SCREEN_NAME]。${C_RESET}"; pause_return
+  echo -e "${C_OK}推流已启动 [$SCREEN_NAME]。${C_RESET}"; pause_return
 }
 
 
